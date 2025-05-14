@@ -1,0 +1,22 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+wayland = []
+x11 = []
+software = []
+
+[dependencies]
+bitflags = { version = "2.9.0" }
+bytemuck = { version = "1.22.0" }
+futures = { version = "0.3.31" }
+fxhash = { version = "0.2.1" }
+image = { version = "0.25.5" }
+lazy_static = { version = "1.5.0" }
+rand = { version = "0.9.0" }
+softbuffer = "0.4.6"
+wgpu = { version = "24.0.1" }
+winit = { version = "0.30.9" }
+
