@@ -10,7 +10,7 @@ pub struct KeyBinding<T: Eq> {
     pub key: T,
 }
 
-pub struct InputInner {
+pub(crate) struct InputInner {
     pub key_bindings: HashMap<Key, bool>,
     pub just_key_bindings: HashMap<Key, bool>,
     pub events: ArcRef<Vec<winit::event::WindowEvent>>,
@@ -46,6 +46,11 @@ impl InputInner {
                         .and_modify(|state| *state = current_state)
                         .or_insert(current_state);
 
+                    // Just keybinding set to false when keyup
+                    if !current_state {
+                        self.just_key_bindings.insert(key.clone(), false);
+                    }
+
                     if previous_state != current_state {
                         for callback in &self.keyboard_callbacks {
                             callback(key.clone(), current_state);
@@ -80,11 +85,21 @@ impl InputInner {
                         winit::event::MouseButton::Other(code) => *code as u8,
                     };
 
-                    if *state == winit::event::ElementState::Pressed {
-                        self.mouse_buttons.insert(button_code, true);
-                    } else {
-                        self.mouse_buttons.remove(&button_code);
-                    }
+                    println!(
+                        "Mouse button: {:?}, {}",
+                        button,
+                        *state == winit::event::ElementState::Pressed
+                    );
+
+                    self.mouse_buttons
+                        .insert(button_code, *state == winit::event::ElementState::Pressed);
+                }
+                winit::event::WindowEvent::CursorMoved {
+                    device_id: _,
+                    position,
+                } => {
+                    self.mouse_position.x = position.x as f32;
+                    self.mouse_position.y = position.y as f32;
                 }
                 _ => {}
             }
@@ -93,13 +108,18 @@ impl InputInner {
 }
 
 pub struct Input {
-    pub inner: ArcRef<InputInner>,
+    pub(crate) inner: ArcRef<InputInner>,
 }
 
 impl Input {
     pub fn new(runner: &mut Runner, window: &Window) -> Self {
         let window_inner = window.inner.borrow();
-        let window_id = &window_inner.window_pointer.as_ref().unwrap().id();
+        let window_id = &window_inner
+            .window_pointer
+            .as_ref()
+            .unwrap()
+            .lock()
+            .get_window_id();
 
         let inner = InputInner {
             key_bindings: HashMap::new(),
@@ -120,7 +140,7 @@ impl Input {
 
     pub fn is_key_pressed(&self, key: &str) -> bool {
         let inner_ref = self.inner.borrow();
-        let key = mapping_key(key);
+        let key = str_mapping_key(key);
 
         if let Some(pressed) = inner_ref.key_bindings.get(&key) {
             *pressed
@@ -131,10 +151,22 @@ impl Input {
 
     pub fn is_key_released(&self, key: &str) -> bool {
         let inner_ref = self.inner.borrow();
-        let key = mapping_key(key);
+        let key = str_mapping_key(key);
 
         if let Some(pressed) = inner_ref.key_bindings.get(&key) {
             !pressed
+        } else {
+            false
+        }
+    }
+
+    pub fn is_key_just_pressed(&self, key: &str) -> bool {
+        let mut inner_ref = self.inner.borrow_mut();
+        let key = str_mapping_key(key);
+
+        if let Some(pressed) = inner_ref.just_key_bindings.get_mut(&key) {
+            *pressed = true;
+            *pressed
         } else {
             false
         }
@@ -204,7 +236,7 @@ impl Input {
     }
 }
 
-fn mapping_key(key: &str) -> Key {
+pub(crate) fn str_mapping_key(key: &str) -> Key {
     match key.to_lowercase().as_str() {
         "alt" => Key::Named(NamedKey::Alt),
         "altgraph" => Key::Named(NamedKey::AltGraph),
@@ -251,5 +283,54 @@ fn mapping_key(key: &str) -> Key {
         "f12" => Key::Named(NamedKey::F12),
 
         _ => Key::Character(SmolStr::new(key.to_lowercase())),
+    }
+}
+
+pub(crate) fn named_key_to_str(key: &NamedKey) -> Option<SmolStr> {
+    match key {
+        NamedKey::Alt => Some(SmolStr::new("Alt")),
+        NamedKey::AltGraph => Some(SmolStr::new("AltGraph")),
+        NamedKey::CapsLock => Some(SmolStr::new("CapsLock")),
+        NamedKey::Control => Some(SmolStr::new("Control")),
+        NamedKey::Fn => Some(SmolStr::new("Fn")),
+        NamedKey::FnLock => Some(SmolStr::new("FnLock")),
+        NamedKey::NumLock => Some(SmolStr::new("NumLock")),
+        NamedKey::ScrollLock => Some(SmolStr::new("ScrollLock")),
+        NamedKey::Shift => Some(SmolStr::new("Shift")),
+        NamedKey::Symbol => Some(SmolStr::new("Symbol")),
+        NamedKey::SymbolLock => Some(SmolStr::new("SymbolLock")),
+        NamedKey::Meta => Some(SmolStr::new("Meta")),
+        NamedKey::Hyper => Some(SmolStr::new("Hyper")),
+        NamedKey::Super => Some(SmolStr::new("Super")),
+        NamedKey::Enter => Some(SmolStr::new("Enter")),
+        NamedKey::Tab => Some(SmolStr::new("Tab")),
+        NamedKey::Space => Some(SmolStr::new("Space")),
+        NamedKey::ArrowDown => Some(SmolStr::new("ArrowDown")),
+        NamedKey::ArrowLeft => Some(SmolStr::new("ArrowLeft")),
+        NamedKey::ArrowRight => Some(SmolStr::new("ArrowRight")),
+        NamedKey::ArrowUp => Some(SmolStr::new("ArrowUp")),
+        NamedKey::End => Some(SmolStr::new("End")),
+        NamedKey::Home => Some(SmolStr::new("Home")),
+        NamedKey::PageDown => Some(SmolStr::new("PageDown")),
+        NamedKey::PageUp => Some(SmolStr::new("PageUp")),
+        NamedKey::Backspace => Some(SmolStr::new("Backspace")),
+        NamedKey::Clear => Some(SmolStr::new("Clear")),
+        NamedKey::Delete => Some(SmolStr::new("Delete")),
+        NamedKey::Insert => Some(SmolStr::new("Insert")),
+        NamedKey::Escape => Some(SmolStr::new("Escape")),
+        NamedKey::Pause => Some(SmolStr::new("Pause")),
+        NamedKey::F1 => Some(SmolStr::new("F1")),
+        NamedKey::F2 => Some(SmolStr::new("F2")),
+        NamedKey::F3 => Some(SmolStr::new("F3")),
+        NamedKey::F4 => Some(SmolStr::new("F4")),
+        NamedKey::F5 => Some(SmolStr::new("F5")),
+        NamedKey::F6 => Some(SmolStr::new("F6")),
+        NamedKey::F7 => Some(SmolStr::new("F7")),
+        NamedKey::F8 => Some(SmolStr::new("F8")),
+        NamedKey::F9 => Some(SmolStr::new("F9")),
+        NamedKey::F10 => Some(SmolStr::new("F10")),
+        NamedKey::F11 => Some(SmolStr::new("F11")),
+        NamedKey::F12 => Some(SmolStr::new("F12")),
+        _ => None,
     }
 }

@@ -1,211 +1,151 @@
-pub mod graphics;
-pub mod math;
-pub mod prelude;
-pub mod utils;
-pub mod window;
+//! Easy to use winit, softbuffer & wgpu abstractions
 
-use graphics::{GPU, GPUAdapter};
-use math::Point;
-pub use window::Window;
-use window::{input::Input, runner::Runner};
+/// Font rendering and text layout utilities
+pub mod font;
+/// GPU graphics rendering abstractions
+pub mod gpu;
+/// Mathematical utilities and types
+pub mod math;
+/// Predefined types and traits for easy access
+pub mod prelude;
+/// Utility functions and types for common tasks
+pub mod utils;
+/// Window management and event handling abstractions
+pub mod window;
+use gpu::{GPU, GPUAdapter};
+use window::{Runner, Window};
 
 #[cfg(feature = "software")]
 use window::pixel_buffer::PixelBuffer;
 
-pub struct RenderEngine;
+use crate::prelude::Limits;
 
-impl RenderEngine {
-    /// Create a EventLoop instance, required for creating one or more windows. \
-    /// This will make the thread caller the main thread.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let mut event_loop = Engine::make_event_loop();
-    /// ```
-    pub fn make_runner() -> Result<Runner, String> {
-        Runner::new()
-    }
+/// Create a EventLoop instance, required for creating one or more windows.
+///
+/// **NOTE:** When calling this function, the thread will be made the main thread,
+/// future calls to this function will panic if called from a different thread.
+///
+/// # Example
+/// ```rs
+/// use engine::prelude::*;
+///
+/// let mut event_loop = Engine::make_event_loop();
+/// ```
+pub fn create_runner() -> Result<Runner, String> {
+    Runner::new()
+}
 
-    /// Creates a new window with the given title, size, and position. \
-    /// **NOTE:** This function will make the thread caller the main thread.
-    /// It will panic if called from a different thread after the first call.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let mut window = Engine::make_window("Hello", Size::new(800, 600), Position::new(100, 100))
-    ///    .build();
-    /// ```
-    pub fn make_window(title: &str, size: Point, pos: Option<Point>) -> WindowBuilder {
-        WindowBuilder::new(title, size, pos)
-    }
+/// Creates a new GPU instance.
+///
+/// This is thread-safe and can be called from any thread, except when using
+/// the `with_window` method, which binds the GPU to the window's thread.
+///
+/// # Example
+/// ```rs
+/// use engine::prelude::*;
+///
+/// let gpu = Engine::make_gpu()
+///    .build();
+/// ```
+pub fn create_gpu<'a>(window: Option<&'a mut Window>) -> GPUBuilder<'a> {
+    let builder = GPUBuilder::new();
 
-    /// Creates a new GPU instance. \
-    /// This is thread-safe and can be called from any thread, except when using
-    /// the `with_window` method, which binds the GPU to the window's thread.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let gpu = Engine::make_gpu()
-    ///    .build();
-    /// ```
-    pub fn make_gpu() -> GpuBuilder<'static> {
-        GpuBuilder::new()
-    }
-
-    /// Creates a new PixelBuffer instance. \
-    /// This is not thread-safe and must be called from the same thread as the window.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let pixel_buffer = Engine::make_pixel_buffer()
-    ///   .with_window(&mut window)
-    ///   .build()?;
-    ///
-    /// let pixels = vec![0u32; (800 * 600) as usize];
-    /// pixel_buffer.write_buffers(&pixels, Vector2::new(800.0, 600.0))?;
-    /// ```
-    #[cfg(feature = "software")]
-    pub fn make_pixel_buffer() -> PixelBufferBuilder<'static> {
-        PixelBufferBuilder::new()
-    }
-
-    /// Queries the available GPU adapters. \
-    /// This is useful for checking the available GPU adapters on the system and the supported \
-    /// graphics APIs.
-    ///
-    /// This function can be called from any thread.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let adapters = Engine::query_gpu_adapter(None);
-    /// if adapters.is_empty() {
-    ///    println!("No GPU adapters found");
-    /// } else {
-    ///    println!("Found {} GPU adapters", adapters.len());
-    /// }
-    /// ```
-    pub fn query_gpu_adapter(window: Option<&Window>) -> Vec<GPUAdapter> {
-        let mut window_arc = None;
-        if let Some(window) = window {
-            window_arc = Some(
-                window
-                    .inner
-                    .borrow()
-                    .window_pointer
-                    .as_ref()
-                    .unwrap()
-                    .clone(),
-            );
-        }
-
-        GPU::query_gpu(window_arc)
-    }
-
-    /// Creates a new Input instance. \
-    /// This is not thread-safe and must be called from the same thread as the window.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let input = Engine::make_input()
-    ///   .with_runner(&mut runner)
-    ///   .with_window(&mut window)
-    ///   .build()?;
-    ///
-    /// if input.is_key_pressed("A") {
-    ///    println!("Key A is pressed");
-    /// }
-    /// ```
-    pub fn make_input() -> InputBuilder<'static> {
-        InputBuilder::new()
+    if let Some(window) = window {
+        builder.set_window(window)
+    } else {
+        builder
     }
 }
 
-pub struct WindowBuilder<'a> {
-    parent_window: Option<&'a Window>,
-    title: String,
-    size: Point,
-    pos: Option<Point>,
+/// Creates a new PixelBuffer instance. \
+/// This is not thread-safe and must be called from the same thread as the window.
+///
+/// # Example
+/// ```rs
+/// use engine::prelude::*;
+///
+/// let pixel_buffer = Engine::make_pixel_buffer()
+///   .with_window(&mut window)
+///   .build()?;
+///
+/// let pixels = vec![0u32; (800 * 600) as usize];
+/// pixel_buffer.write_buffers(&pixels, Vector2::new(800.0, 600.0))?;
+/// ```
+#[cfg(feature = "software")]
+pub fn create_pixel_buffer() -> PixelBufferBuilder<'static> {
+    PixelBufferBuilder::new()
 }
 
-impl<'a> WindowBuilder<'a> {
-    pub(crate) fn new(title: &str, size: Point, pos: Option<Point>) -> WindowBuilder {
-        WindowBuilder {
-            parent_window: None,
-            title: title.to_string(),
-            size,
-            pos,
-        }
+/// Queries the available GPU adapters.
+///
+/// This is useful for checking the available GPU adapters on the system and the supported \
+/// graphics APIs.
+///
+/// This function can be called from any thread.
+///
+/// # Example
+/// ```rs
+/// use engine::prelude::*;
+///
+/// let adapters = Engine::query_gpu_adapter(None);
+/// if adapters.is_empty() {
+///    println!("No GPU adapters found");
+/// } else {
+///    println!("Found {} GPU adapters", adapters.len());
+/// }
+/// ```
+pub fn query_gpu_adapter(window: Option<&Window>) -> Vec<GPUAdapter> {
+    let mut window_arc = None;
+    if let Some(window) = window {
+        window_arc = Some(
+            window
+                .inner
+                .borrow()
+                .window_pointer
+                .as_ref()
+                .unwrap()
+                .clone(),
+        );
     }
 
-    /// Sets the title of the window.
-    pub fn title(mut self, title: String) -> Self {
-        self.title = title;
-        self
-    }
-
-    /// Sets the size of the window.
-    pub fn size(mut self, size: Point) -> Self {
-        self.size = size;
-        self
-    }
-
-    /// Sets the position of the window.
-    pub fn pos(mut self, pos: Option<Point>) -> Self {
-        self.pos = pos;
-        self
-    }
-
-    /// Sets the parent window for this window. \
-    /// This is useful for creating child windows or popups.
-    /// The parent window must be created before this window.
-    pub fn with_parent_window(mut self, parent: &'a Window) -> Self {
-        self.parent_window = Some(parent);
-        self
-    }
-
-    pub fn build(self, runner: &mut Runner) -> Result<Window, String> {
-        Window::new(runner, self.parent_window, self.title, self.size, self.pos)
-    }
+    GPU::query_gpu(window_arc)
 }
 
-pub struct GpuBuilder<'a> {
+pub struct GPUBuilder<'a> {
     window: Option<&'a mut Window>,
     adapter: Option<&'a GPUAdapter>,
+    limits: Option<Limits>,
 }
 
-impl<'a> GpuBuilder<'a> {
+impl<'a> GPUBuilder<'a> {
     pub(crate) fn new() -> Self {
-        GpuBuilder {
+        GPUBuilder {
             window: None,
             adapter: None,
+            limits: None,
         }
     }
 
-    /// Sets the window for this GPU instance. \
+    /// Sets the window for this GPU instance.
+    ///
     /// This is useful for creating a GPU instance that is bound to a specific window.
     /// The window must be created before this GPU instance.
-    pub fn with_window(mut self, window: &'a mut Window) -> Self {
+    pub fn set_window(mut self, window: &'a mut Window) -> Self {
         self.window = Some(window);
         self
     }
 
-    /// Sets the GPU adapter for this GPU instance. \
+    /// Sets the GPU adapter for this GPU instance.
+    ///
     /// This is useful for creating a GPU instance that uses a specific GPU adapter.
     /// The adapter can be queried using the `Engine::query_gpu_adapter` function.
-    pub fn with_adapter(mut self, adapter: &'a GPUAdapter) -> Self {
+    pub fn set_adapter(mut self, adapter: &'a GPUAdapter) -> Self {
         self.adapter = Some(adapter);
+        self
+    }
+
+    pub fn set_limits(mut self, limits: Limits) -> Self {
+        self.limits = Some(limits);
         self
     }
 
@@ -225,11 +165,11 @@ impl<'a> GpuBuilder<'a> {
 
             let window_cloned = window_inner.window_pointer.as_ref().unwrap().clone();
 
-            gpu = futures::executor::block_on(GPU::new(window_cloned, self.adapter))?;
+            gpu = futures::executor::block_on(GPU::new(window_cloned, self.adapter, self.limits))?;
 
             window_inner.graphics = Some(gpu.inner.clone());
         } else {
-            gpu = futures::executor::block_on(GPU::new_headless(self.adapter))?;
+            gpu = futures::executor::block_on(GPU::new_headless(self.adapter, self.limits))?;
         }
 
         Ok(gpu)
@@ -275,45 +215,5 @@ impl<'a> PixelBufferBuilder<'a> {
         window_inner.pixelbuffer = Some(pixel_buffer.inner.clone());
 
         Ok(pixel_buffer)
-    }
-}
-
-pub struct InputBuilder<'a> {
-    runner: Option<&'a mut Runner>,
-    window: Option<&'a mut Window>,
-}
-
-impl<'a> InputBuilder<'a> {
-    pub(crate) fn new() -> Self {
-        InputBuilder {
-            runner: None,
-            window: None,
-        }
-    }
-
-    /// Sets the runner for this Input instance.
-    pub fn with_runner(mut self, runner: &'a mut Runner) -> Self {
-        self.runner = Some(runner);
-        self
-    }
-
-    /// Sets the window for this Input instance.
-    pub fn with_window(mut self, window: &'a mut Window) -> Self {
-        self.window = Some(window);
-        self
-    }
-
-    pub fn build(self) -> Result<Input, String> {
-        if self.runner.is_none() {
-            return Err("Input must be created with a runner".to_string());
-        }
-
-        if self.window.is_none() {
-            return Err("Input must be created with a window".to_string());
-        }
-
-        let input = Input::new(self.runner.unwrap(), self.window.unwrap());
-
-        Ok(input)
     }
 }

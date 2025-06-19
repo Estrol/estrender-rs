@@ -1,19 +1,17 @@
-use std::sync::Arc;
-
 use winit::{event, event_loop::EventLoopProxy, window::Cursor};
 
 use crate::{
-    graphics::inner::GPUInner,
-    math::{Point, Position, Size, Timing},
-    utils::ArcRef,
+    gpu::GPUInner,
+    math::{Point2, Position, Size, Timing},
+    utils::{ArcMut, ArcRef},
 };
 
 mod inner;
-pub mod input;
-pub mod pixel_buffer;
-pub mod runner;
+mod input;
+mod pixel_buffer;
+mod runner;
 
-pub use inner::*;
+pub(crate) use inner::*;
 pub use input::*;
 pub use runner::*;
 
@@ -31,11 +29,12 @@ pub enum RunMode {
 
 // type RedrawCallback = Box<dyn FnMut()>;
 
-pub struct InnerAttribute {
+pub(crate) struct InnerAttribute {
     pub window_id: usize,
     pub window_events: ArcRef<Vec<event::WindowEvent>>,
-    pub window_pointer: Option<Arc<winit::window::Window>>,
+    pub window_pointer: Option<ArcMut<Handle>>,
     pub proxy: EventLoopProxy<WindowEvent>,
+    pub size: Point2,
 
     pub(crate) graphics: Option<ArcRef<GPUInner>>,
 
@@ -48,10 +47,6 @@ impl InnerAttribute {
         for event in self.window_events.wait_borrow_mut().iter() {
             match event {
                 event::WindowEvent::CloseRequested => {
-                    if let Some(gpu) = &self.graphics {
-                        gpu.wait_borrow_mut().destroy();
-                    }
-
                     self.graphics = None;
                     self.window_pointer = None;
                 }
@@ -64,6 +59,8 @@ impl InnerAttribute {
                     if let Some(softbuffer) = &self.pixelbuffer {
                         _ = softbuffer.wait_borrow_mut().resize(*size);
                     }
+
+                    self.size = Point2::from(*size);
                 }
                 _ => {}
             }
@@ -77,12 +74,12 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(
+    pub(crate) fn new(
         runner: &mut Runner,
         parent: Option<&Window>,
         title: String,
-        size: Point,
-        pos: Option<Point>,
+        size: Point2,
+        pos: Option<Point2>,
     ) -> Result<Self, String> {
         let parent_id = if let Some(parent) = parent {
             Some(parent.inner.wait_borrow().window_id)
@@ -90,7 +87,7 @@ impl Window {
             None
         };
 
-        let result = runner.new_window(parent_id, title, size, pos);
+        let result = runner.internal_new_window(parent_id, title, size, pos);
         if result.is_err() {
             return Err(result.err().unwrap());
         }
@@ -112,6 +109,7 @@ impl Window {
             window_pointer: Some(window_pointer),
             proxy,
             graphics: None,
+            size: size.into(),
 
             #[cfg(feature = "software")]
             pixelbuffer: None,
@@ -123,6 +121,14 @@ impl Window {
             inner,
             timing: Timing::new(60),
         })
+    }
+
+    pub fn id(&self) -> usize {
+        self.inner.wait_borrow().window_id
+    }
+
+    pub fn size(&self) -> Point2 {
+        self.inner.wait_borrow().size
     }
 
     pub fn quit(&self) {
@@ -186,13 +192,21 @@ impl Window {
     }
 
     /// Request a redraw of the window. \
-    /// This is useful when you want to update the window's content.
+    /// This is useful when you want to manually trigger a redraw of the window, \
+    /// for example, when you have made changes to the window that need to be reflected on the screen.
+    /// and the runner is in [RunMode::ReDraw].
     pub fn request_redraw(&mut self) {
         let inner = self.inner.wait_borrow();
 
         _ = inner.proxy.send_event(WindowEvent::Redraw {
             ref_id: inner.window_id,
         });
+    }
+
+    /// Get window events that have been processed by the event loop for this window. \
+    /// This will return a vector of events that have been processed since the last call to this method.
+    pub fn get_events(&self) -> Vec<Event> {
+        unimplemented!()
     }
 }
 

@@ -5,28 +5,26 @@ pub struct Size {
 }
 
 impl Size {
-    pub fn new(width: i32, height: i32) -> Self {
-        Self { width, height }
-    }
-
-    pub fn zero() -> Self {
+    pub fn new<T: ToPrimitive>(width: T, height: T) -> Self {
         Self {
-            width: 0,
-            height: 0,
+            width: width.to_i32().unwrap_or(0),
+            height: height.to_i32().unwrap_or(0),
         }
     }
 
-    pub fn one() -> Self {
-        Self {
-            width: 1,
-            height: 1,
-        }
-    }
+    pub const ZERO: Self = Self {
+        width: 0,
+        height: 0,
+    };
+    pub const ONE: Self = Self {
+        width: 1,
+        height: 1,
+    };
 }
 
 impl Default for Size {
     fn default() -> Self {
-        Self::zero()
+        Self::ZERO
     }
 }
 
@@ -42,6 +40,7 @@ impl Into<wgpu::Extent3d> for Size {
 
 use std::ops::*;
 
+use num_traits::ToPrimitive;
 use winit::dpi::PhysicalSize;
 
 impl Add for Size {

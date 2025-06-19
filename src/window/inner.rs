@@ -16,8 +16,9 @@ use winit::{
 };
 
 use crate::{
-    math::{Point, Position, Size},
-    utils::ArcRef,
+    dbg_log,
+    math::{Point2, Position, Size},
+    utils::{ArcMut, ArcRef},
 };
 
 use super::{CursorIcon, CustomCursorItem};
@@ -29,8 +30,8 @@ pub enum WindowEvent {
         ref_id: usize,
         parent_ref_id: Option<usize>,
         title: String,
-        size: Point,
-        pos: Option<Point>,
+        size: Point2,
+        pos: Option<Point2>,
     },
     Close {
         ref_id: usize,
@@ -60,23 +61,77 @@ pub enum WindowEvent {
     },
 }
 
-#[derive(Clone, Debug, Hash)]
-pub enum CursorSource {
-    String(&'static str),
-    Buffer(Vec<u8>),
+// #[derive(Clone, Debug, Hash)]
+// pub enum CursorSource {
+//     String(&'static str),
+//     Buffer(Vec<u8>),
+// }
+
+#[derive(Clone, Debug)]
+pub struct Handle {
+    pub window: Option<Arc<Window>>,
+    pub is_closed: bool,
+    pub is_pinned: bool,
+}
+
+#[allow(dead_code)]
+impl Handle {
+    pub fn new(window: Arc<Window>) -> Self {
+        Self {
+            window: Some(window),
+            is_closed: false,
+            is_pinned: false,
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.is_closed
+    }
+
+    pub fn close(&mut self) {
+        self.window = None;
+        self.is_closed = true;
+    }
+
+    pub fn set_window(&mut self, window: Option<Arc<Window>>) {
+        self.window = window;
+    }
+
+    pub fn get_window(&self) -> &Arc<Window> {
+        if self.is_closed {
+            panic!("Window is closed");
+        }
+
+        self.window.as_ref().unwrap()
+    }
+
+    pub fn get_window_id(&self) -> WindowId {
+        if self.is_closed {
+            panic!("Window is closed");
+        }
+
+        self.window.as_ref().unwrap().id()
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.is_pinned
+    }
+
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.is_pinned = pinned;
+    }
 }
 
 pub struct WindowHandle {
-    pub window: Arc<Window>,
+    pub window: ArcMut<Handle>,
     pub events: ArcRef<Vec<event::WindowEvent>>,
 
     pub ref_id: usize,
-    pub is_closed: bool,
 }
 
 impl Drop for WindowHandle {
     fn drop(&mut self) {
-        dbg!(format!("WindowHandle dropped: {:?}", self.ref_id));
+        dbg_log!("WindowHandle dropped: {:?}", self.ref_id);
     }
 }
 
@@ -97,18 +152,21 @@ impl WindowInner {
         }
     }
 
-    pub fn get_window_by_ref(&self, ref_id: usize) -> Option<&WindowHandle> {
+    pub fn get_window_handle_by_ref(&self, ref_id: usize) -> Option<ArcMut<Handle>> {
         self.handles
             .iter()
             .find(|(_, handle)| handle.ref_id == ref_id)
-            .map(|(_, handle)| handle)
+            .map(|(_, handle)| handle.window.clone())
     }
 
-    pub fn get_window_by_ref_mut(&mut self, ref_id: usize) -> Option<&mut WindowHandle> {
+    pub fn get_window_events_by_ref(
+        &self,
+        ref_id: usize,
+    ) -> Option<ArcRef<Vec<event::WindowEvent>>> {
         self.handles
-            .iter_mut()
+            .iter()
             .find(|(_, handle)| handle.ref_id == ref_id)
-            .map(|(_, handle)| handle)
+            .map(|(_, handle)| handle.events.clone())
     }
 }
 
@@ -195,11 +253,22 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
                 }
 
                 if let Some(parent_ref_id) = parent_ref_id {
-                    if let Some(parent_window) = self.get_window_by_ref(parent_ref_id) {
+                    if let Some(parent_window) = self.get_window_handle_by_ref(parent_ref_id) {
+                        let parent_window = parent_window.lock();
+
                         // SAFETY: We are using the `window_handle` method to get the raw window handle,
                         // which is safe as long as the window is valid and not dropped.
                         unsafe {
-                            let parent_window = parent_window.window.window_handle();
+                            if parent_window.is_closed() {
+                                self.last_error = Some(format!(
+                                    "Parent window is None for ref_id: {}",
+                                    parent_ref_id
+                                ));
+                                return;
+                            }
+
+                            let parent_window = parent_window.get_window().window_handle();
+
                             if let Err(e) = parent_window {
                                 self.last_error =
                                     Some(format!("Failed to set parent window: {:?}", e));
@@ -217,16 +286,19 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
                 let window = event_loop.create_window(window_attributes);
 
                 if let Ok(window) = window {
-                    self.handles.insert(
-                        window.id(),
-                        WindowHandle {
-                            window: Arc::new(window),
-                            events: ArcRef::new(Vec::new()),
-                            ref_id,
-                            is_closed: false,
-                        },
-                    );
+                    let window_id = window.id();
+                    let handle = Handle::new(Arc::new(window));
+
+                    let window_handle = WindowHandle {
+                        window: ArcMut::new(handle),
+                        events: ArcRef::new(Vec::new()),
+                        ref_id,
+                    };
+
+                    dbg_log!("Window {} created", ref_id);
+                    self.handles.insert(window_id, window_handle);
                 } else {
+                    dbg_log!("Failed to create window: {:?}", window);
                     self.last_error = Some(format!("Failed to create window: {:?}", window));
                 }
             }
@@ -248,50 +320,67 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
 
                 if let Some(window_id) = to_remove {
                     if let Some(handle) = self.handles.get_mut(&window_id) {
-                        handle.is_closed = true;
-                        handle.window.set_visible(false);
+                        handle.window.lock().close();
                     }
 
+                    dbg_log!("Window {} closed", ref_id);
                     self.handles.remove(&window_id);
                 }
 
                 if self.handles.is_empty() {
+                    dbg_log!("All windows closed, exiting event loop");
                     event_loop.exit();
                 }
             }
             WindowEvent::Title { ref_id, title } => {
-                let window = self.get_window_by_ref_mut(ref_id);
-                if let Some(window) = window {
-                    window.window.set_title(&title);
+                if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
+                    let window = handle.lock();
+                    let window = window.get_window();
+
+                    dbg_log!("Window {} title: {}", ref_id, title);
+
+                    window.set_title(title.as_str());
                 }
             }
             WindowEvent::Size { ref_id, size } => {
-                let window = self.get_window_by_ref_mut(ref_id);
-                if let Some(window) = window {
+                if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
                     let size: PhysicalSize<u32> = size.into();
 
-                    window.window.set_max_inner_size(Some(size));
-                    window.window.set_min_inner_size(Some(size));
-                    _ = window.window.request_inner_size(size);
+                    let handle_ref = handle.lock();
+                    let window = handle_ref.get_window();
+
+                    dbg_log!("Window {} size: {:?}", ref_id, size);
+
+                    window.set_max_inner_size(Some(size));
+                    window.set_min_inner_size(Some(size));
+                    _ = window.request_inner_size(size);
                 }
             }
             WindowEvent::Position { ref_id, pos } => {
-                let window = self.get_window_by_ref_mut(ref_id);
-                if let Some(window) = window {
+                if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
                     let pos: PhysicalPosition<i32> = pos.into();
-                    window.window.set_outer_position(pos);
+                    let handle_ref = handle.lock();
+                    let window = handle_ref.get_window();
+
+                    dbg_log!("Window {} position: {:?}", ref_id, pos);
+                    window.set_outer_position(pos);
                 }
             }
             WindowEvent::Visible { ref_id, visible } => {
-                let window = self.get_window_by_ref_mut(ref_id);
-                if let Some(window) = window {
-                    window.window.set_visible(visible);
+                if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
+                    let handle_ref = handle.lock();
+                    let window = handle_ref.get_window();
+
+                    dbg_log!("Window {} visible: {}", ref_id, visible);
+                    window.set_visible(visible);
                 }
             }
             WindowEvent::Redraw { ref_id } => {
-                let window = self.get_window_by_ref_mut(ref_id);
-                if let Some(window) = window {
-                    window.window.request_redraw();
+                if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
+                    let handle_ref = handle.lock();
+                    let window = handle_ref.get_window();
+
+                    window.request_redraw();
                 }
             }
             WindowEvent::Cursor { ref_id, cursor } => {
@@ -301,8 +390,11 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
                     let hash = hash.finish();
 
                     if let Some(cached_cursor) = self.cursor_cache.get(&hash).cloned() {
-                        if let Some(window) = self.get_window_by_ref_mut(ref_id) {
-                            window.window.set_cursor(cached_cursor);
+                        if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
+                            let handle_ref = handle.lock();
+                            let window = handle_ref.get_window();
+
+                            window.set_cursor(cached_cursor.clone());
                         }
                         return;
                     }
@@ -318,12 +410,18 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
 
                     self.cursor_cache.insert(hash, cursor.clone());
 
-                    if let Some(window) = self.get_window_by_ref_mut(ref_id) {
-                        window.window.set_cursor(cursor);
+                    if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
+                        let handle_ref = handle.lock();
+                        let window = handle_ref.get_window();
+
+                        window.set_cursor(cursor.clone());
                     }
                 } else {
-                    if let Some(window) = self.get_window_by_ref_mut(ref_id) {
-                        window.window.set_cursor(cursor.clone().unwrap());
+                    if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
+                        let handle_ref = handle.lock();
+                        let window = handle_ref.get_window();
+
+                        window.set_cursor(cursor.clone().unwrap());
                     }
                 }
             }

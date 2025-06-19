@@ -1,22 +1,37 @@
 [package]
-name = "engine"
-version = "0.1.0"
+name = "est-render"
+version = "0.1.1"
 edition = "2024"
+authors = ["Estrol Mendex <estrol@estrol.dev>"]
+description = "Easy to use winit, softbuffer & wgpu abstractions"
+documentation = "https://docs.rs/est-render"
+license = "MIT-0 OR Apache-2.0"
 
 [features]
 wayland = []
 x11 = []
 software = []
+enable-release-validation = []
 
 [dependencies]
 bitflags = { version = "2.9.0" }
 bytemuck = { version = "1.22.0" }
+byteorder-lite = "0.1.0"
+flate2 = "1.1.1"
+fontdue = "0.9.3"
 futures = { version = "0.3.31" }
 fxhash = { version = "0.2.1" }
+half = "2.6.0"
 image = { version = "0.25.5" }
 lazy_static = { version = "1.5.0" }
+num-traits = "0.2.19"
 rand = { version = "0.9.0" }
+scopeguard = "1.2.0"
+smol_str = "0.2.2"
 softbuffer = "0.4.6"
-wgpu = { version = "24.0.1" }
+ttf-parser = "0.25.1"
+wgpu = { version = "25.0.2", features = ["spirv"] }
 winit = { version = "0.30.9" }
 
+[package.metadata.docs.rs]
+all-features = true

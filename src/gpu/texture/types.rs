@@ -1,11 +1,3 @@
-#![allow(dead_code)]
-
-use wgpu::{Extent3d, TextureDescriptor};
-
-use crate::{graphics::buffer::BufferUsages, math::Rect, utils::ArcRef};
-
-use super::{buffer::BufferBuilder, inner::GPUInner};
-
 #[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TextureUsage(u32);
 
@@ -34,7 +26,7 @@ impl Into<wgpu::TextureUsages> for TextureUsage {
     }
 }
 
-#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SampleCount {
     SampleCount1,
     SampleCount2,
@@ -53,7 +45,7 @@ impl Into<u32> for SampleCount {
     }
 }
 
-#[derive(Clone, Hash, Copy)]
+#[derive(Clone, Debug, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BlendOperation {
     Add,
     Subtract,
@@ -62,7 +54,7 @@ pub enum BlendOperation {
     Max,
 }
 
-#[derive(Clone, Hash, Copy)]
+#[derive(Clone, Debug, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BlendFactor {
     Zero,
     One,
@@ -81,15 +73,15 @@ pub enum BlendFactor {
     OneMinusBlendColor,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TextureBlend {
-    pub(crate) color_blend: BlendOperation,
-    pub(crate) alpha_blend: BlendOperation,
-    pub(crate) color_src_factor: BlendFactor,
-    pub(crate) color_dst_factor: BlendFactor,
-    pub(crate) alpha_src_factor: BlendFactor,
-    pub(crate) alpha_dst_factor: BlendFactor,
-    pub(crate) color_blend_constant: [u32; 4],
+    pub color_blend: BlendOperation,
+    pub alpha_blend: BlendOperation,
+    pub color_src_factor: BlendFactor,
+    pub color_dst_factor: BlendFactor,
+    pub alpha_src_factor: BlendFactor,
+    pub alpha_dst_factor: BlendFactor,
+    pub color_blend_constant: [u32; 4],
 }
 
 impl TextureBlend {
@@ -110,6 +102,72 @@ impl TextureBlend {
             alpha_src_factor,
             alpha_dst_factor,
             color_blend_constant,
+        }
+    }
+
+    pub(crate) fn from_wgpu(
+        state: Option<wgpu::BlendState>,
+        color_write_mask: Option<wgpu::ColorWrites>,
+    ) -> Self {
+        let mut write_mask = [0x00, 0x00, 0x00, 0x00];
+        if let Some(mask) = color_write_mask {
+            if mask.contains(wgpu::ColorWrites::RED) {
+                write_mask[0] = 0xFF;
+            }
+            if mask.contains(wgpu::ColorWrites::GREEN) {
+                write_mask[1] = 0xFF;
+            }
+            if mask.contains(wgpu::ColorWrites::BLUE) {
+                write_mask[2] = 0xFF;
+            }
+            if mask.contains(wgpu::ColorWrites::ALPHA) {
+                write_mask[3] = 0xFF;
+            }
+        }
+
+        let mut blend = Self::NONE;
+        if let Some(state) = state {
+            blend.color_blend = Self::wgpu_op_to_blend_op(state.color.operation);
+            blend.alpha_blend = Self::wgpu_op_to_blend_op(state.alpha.operation);
+            blend.color_src_factor = Self::wgpu_factor_to_blend_factor(state.color.src_factor);
+            blend.color_dst_factor = Self::wgpu_factor_to_blend_factor(state.color.dst_factor);
+            blend.alpha_src_factor = Self::wgpu_factor_to_blend_factor(state.alpha.src_factor);
+            blend.alpha_dst_factor = Self::wgpu_factor_to_blend_factor(state.alpha.dst_factor);
+        }
+
+        blend.color_blend_constant = write_mask;
+
+        blend
+    }
+
+    pub(crate) fn wgpu_op_to_blend_op(op: wgpu::BlendOperation) -> BlendOperation {
+        match op {
+            wgpu::BlendOperation::Add => BlendOperation::Add,
+            wgpu::BlendOperation::Subtract => BlendOperation::Subtract,
+            wgpu::BlendOperation::ReverseSubtract => BlendOperation::ReverseSubtract,
+            wgpu::BlendOperation::Min => BlendOperation::Min,
+            wgpu::BlendOperation::Max => BlendOperation::Max,
+        }
+    }
+
+    pub(crate) fn wgpu_factor_to_blend_factor(factor: wgpu::BlendFactor) -> BlendFactor {
+        match factor {
+            wgpu::BlendFactor::Zero => BlendFactor::Zero,
+            wgpu::BlendFactor::One => BlendFactor::One,
+            wgpu::BlendFactor::Src => BlendFactor::SrcColor,
+            wgpu::BlendFactor::OneMinusSrc => BlendFactor::OneMinusSrcColor,
+            wgpu::BlendFactor::Dst => BlendFactor::DstColor,
+            wgpu::BlendFactor::OneMinusDst => BlendFactor::OneMinusDstColor,
+            wgpu::BlendFactor::SrcAlpha => BlendFactor::SrcAlpha,
+            wgpu::BlendFactor::OneMinusSrcAlpha => BlendFactor::OneMinusSrcAlpha,
+            wgpu::BlendFactor::DstAlpha => BlendFactor::DstAlpha,
+            wgpu::BlendFactor::OneMinusDstAlpha => BlendFactor::OneMinusDstAlpha,
+            wgpu::BlendFactor::SrcAlphaSaturated => BlendFactor::SrcAlphaSaturated,
+            wgpu::BlendFactor::Constant => BlendFactor::ConstantColor,
+            wgpu::BlendFactor::OneMinusConstant => BlendFactor::OneMinusConstantColor,
+            _ => {
+                panic!("Unsupported blend factor: {:?}", factor);
+            }
         }
     }
 
@@ -321,7 +379,7 @@ impl Into<wgpu::SamplerBorderColor> for SamplerBorderColor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct TextureSampler {
     pub address_mode_u: AddressMode,
     pub address_mode_v: AddressMode,
@@ -397,6 +455,24 @@ impl TextureSampler {
         anisotropy_clamp: None,
         border_color: None,
     };
+}
+
+impl Eq for TextureSampler {}
+
+impl PartialEq for TextureSampler {
+    fn eq(&self, other: &Self) -> bool {
+        self.address_mode_u == other.address_mode_u
+            && self.address_mode_v == other.address_mode_v
+            && self.address_mode_w == other.address_mode_w
+            && self.mag_filter == other.mag_filter
+            && self.min_filter == other.min_filter
+            && self.mipmap_filter == other.mipmap_filter
+            && self.lod_min_clamp == other.lod_min_clamp
+            && self.lod_max_clamp == other.lod_max_clamp
+            && self.compare == other.compare
+            && self.anisotropy_clamp == other.anisotropy_clamp
+            && self.border_color == other.border_color
+    }
 }
 
 #[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -652,371 +728,3 @@ impl From<wgpu::TextureFormat> for TextureFormat {
         }
     }
 }
-
-pub enum TextureBuilderData<'a> {
-    None,
-    File(&'a str),
-    Data(&'a [u8]),
-    Raw(Rect, &'a [u8], TextureFormat),
-    DepthStencil(Rect, TextureFormat),
-    RenderTarget(Rect),
-}
-
-pub struct TextureBuilder<'a> {
-    pub(crate) graphics: ArcRef<GPUInner>,
-    pub(crate) sample_count: SampleCount,
-    pub(crate) mip_level_count: u32,
-    pub(crate) usage: TextureUsage,
-    pub(crate) data: TextureBuilderData<'a>,
-}
-
-impl<'a> TextureBuilder<'a> {
-    pub(crate) fn new(graphics: ArcRef<GPUInner>) -> Self {
-        if graphics.borrow().is_invalid {
-            panic!("Graphics context is invalid");
-        }
-
-        Self {
-            graphics,
-            sample_count: SampleCount::SampleCount1,
-            mip_level_count: 1,
-            usage: TextureUsage::None,
-            data: TextureBuilderData::None,
-        }
-    }
-
-    pub fn with_file(mut self, file_path: &'a str) -> Self {
-        self.data = TextureBuilderData::File(file_path);
-        self
-    }
-
-    pub fn with_data(mut self, data: &'a [u8]) -> Self {
-        self.data = TextureBuilderData::Data(data);
-        self
-    }
-
-    pub fn with_raw(mut self, data: &'a [u8], size: Rect, format: TextureFormat) -> Self {
-        if format >= TextureFormat::Stencil8 && format <= TextureFormat::Depth32FloatStencil8 {
-            panic!("Depth and stencil formats are not supported in raw data");
-        }
-
-        self.data = TextureBuilderData::Raw(size, data, format);
-        self
-    }
-
-    pub fn with_render_target(mut self, size: Rect) -> Self {
-        self.data = TextureBuilderData::RenderTarget(size);
-        self
-    }
-
-    pub fn with_sample_count(mut self, sample_count: SampleCount) -> Self {
-        self.sample_count = sample_count.into();
-        self
-    }
-
-    pub fn with_depth_stencil(mut self, size: Rect, format: Option<TextureFormat>) -> Self {
-        if size.w == 0 || size.h == 0 {
-            panic!("Depth stencil texture must have a size");
-        }
-
-        self.data =
-            TextureBuilderData::DepthStencil(size, format.unwrap_or(TextureFormat::Depth32Float));
-        self
-    }
-
-    pub fn with_mip_level_count(mut self, mip_level_count: u32) -> Self {
-        self.mip_level_count = mip_level_count;
-        self
-    }
-
-    pub fn with_usage(mut self, usage: TextureUsage) -> Self {
-        if usage.contains(TextureUsage::RenderAttachment) {
-            panic!("Render attachment textures must be created with the render target method");
-        }
-
-        self.usage = usage;
-        self
-    }
-
-    pub fn build(self) -> Result<Texture, String> {
-        Texture::from_builder(self)
-    }
-}
-
-pub struct TextureInner {
-    pub(crate) wgpu_texture: wgpu::Texture,
-    pub(crate) wgpu_view: wgpu::TextureView,
-    pub(crate) wgpu_sampler: wgpu::Sampler,
-
-    pub(crate) size: Rect,
-    pub(crate) usages: TextureUsage,
-    pub(crate) sample_count: SampleCount,
-    pub(crate) blend: TextureBlend,
-    pub(crate) sampler_info: TextureSampler,
-    pub(crate) format: TextureFormat,
-}
-
-#[derive(Clone)]
-pub struct Texture {
-    pub(crate) graphics: ArcRef<GPUInner>,
-    pub(crate) inner: ArcRef<TextureInner>,
-}
-
-impl Texture {
-    pub(crate) fn from_builder(builder: TextureBuilder) -> Result<Self, String> {
-        let texture = match builder.data {
-            TextureBuilderData::Data(data) => {
-                let image = image::load_from_memory(data).map_err(|e| e.to_string())?;
-                let rgba = image.to_rgba8();
-                let dimensions = rgba.dimensions();
-                let size = Rect::new(0, 0, dimensions.0 as i32, dimensions.1 as i32);
-
-                let mut texture = Self::create_texture(
-                    builder.graphics,
-                    size,
-                    builder.sample_count,
-                    builder.mip_level_count,
-                    wgpu::TextureDimension::D2,
-                    TextureFormat::Rgba8Unorm,
-                    builder.usage,
-                )?;
-
-                if let Err(e) = texture.write::<u8>(&rgba) {
-                    return Err(e);
-                }
-
-                Ok(texture)
-            }
-
-            TextureBuilderData::File(file_path) => {
-                let image = image::open(file_path).map_err(|e| e.to_string())?;
-                let rgba = image.to_rgba8();
-                let dimensions = rgba.dimensions();
-                let size = Rect::new(0, 0, dimensions.0 as i32, dimensions.1 as i32);
-
-                let mut texture = Self::create_texture(
-                    builder.graphics,
-                    size,
-                    builder.sample_count,
-                    builder.mip_level_count,
-                    wgpu::TextureDimension::D2,
-                    TextureFormat::Rgba8Unorm,
-                    builder.usage,
-                )?;
-
-                if let Err(e) = texture.write::<u8>(&rgba) {
-                    return Err(e);
-                }
-
-                Ok(texture)
-            }
-
-            TextureBuilderData::Raw(size, data, format) => {
-                let mut texture = Self::create_texture(
-                    builder.graphics,
-                    size,
-                    builder.sample_count,
-                    builder.mip_level_count,
-                    wgpu::TextureDimension::D2,
-                    format,
-                    builder.usage,
-                )?;
-
-                texture.write::<u8>(data)?;
-
-                Ok(texture)
-            }
-
-            TextureBuilderData::DepthStencil(size, format) => {
-                let texture = Self::create_texture(
-                    builder.graphics,
-                    size,
-                    builder.sample_count,
-                    builder.mip_level_count,
-                    wgpu::TextureDimension::D2,
-                    format,
-                    builder.usage | TextureUsage::RenderAttachment,
-                );
-
-                texture
-            }
-
-            TextureBuilderData::RenderTarget(size) => {
-                let graphics_ref = builder.graphics.borrow();
-                let format = if graphics_ref.config.is_some() {
-                    graphics_ref.config.as_ref().unwrap().format
-                } else {
-                    TextureFormat::Rgba8UnormSrgb.into()
-                };
-
-                drop(graphics_ref);
-
-                let texture = Self::create_texture(
-                    builder.graphics,
-                    size,
-                    builder.sample_count,
-                    builder.mip_level_count,
-                    wgpu::TextureDimension::D2,
-                    TextureFormat::from(format),
-                    builder.usage | TextureUsage::RenderAttachment,
-                );
-
-                texture
-            }
-
-            _ => {
-                return Err("Invalid texture data".to_string());
-            }
-        };
-
-        texture
-    }
-
-    fn create_texture(
-        graphics: ArcRef<GPUInner>,
-        size: Rect,
-        sample_count: SampleCount,
-        mip_level_count: u32,
-        dimension: wgpu::TextureDimension,
-        format: TextureFormat,
-        usages: TextureUsage,
-    ) -> Result<Self, String> {
-        let texture_size = Extent3d {
-            width: size.w as u32,
-            height: size.h as u32,
-            depth_or_array_layers: 1,
-        };
-
-        let texture_create_info = TextureDescriptor {
-            size: texture_size,
-            mip_level_count,
-            sample_count: sample_count.clone().into(),
-            dimension,
-            format: format.clone().into(),
-            usage: (wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC)
-                | usages.clone().into(),
-            label: None,
-            view_formats: &[],
-        };
-
-        let graphics_ref = graphics.borrow();
-        let texture = graphics_ref.device.create_texture(&texture_create_info);
-
-        let sampler = TextureSampler::DEFAULT;
-        let wgpu_sampler = sampler.make_wgpu(&graphics_ref.device);
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let inner = TextureInner {
-            wgpu_texture: texture,
-            wgpu_view: view,
-            wgpu_sampler,
-
-            sample_count,
-            usages,
-            blend: TextureBlend::NONE,
-            sampler_info: sampler,
-            size,
-            format,
-        };
-
-        Ok(Self {
-            graphics: ArcRef::clone(&graphics),
-            inner: ArcRef::new(inner),
-        })
-    }
-
-    pub fn write<T: bytemuck::Pod>(&mut self, data: &[T]) -> Result<(), String> {
-        let inner = self.inner.borrow();
-        let queue = &self.graphics.borrow().queue;
-
-        let data = bytemuck::cast_slice(data);
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &inner.wgpu_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * inner.size.w as u32),
-                rows_per_image: Some(inner.size.h as u32),
-            },
-            inner.size.into(),
-        );
-
-        Ok(())
-    }
-
-    pub fn read<T: bytemuck::Pod>(&self) -> Result<Vec<T>, String> {
-        let inner = self.inner.borrow();
-        let inner_graphics = self.graphics.borrow();
-
-        let buffer_size = (inner.size.w * inner.size.h * 4) as usize;
-        let buffer = BufferBuilder::<u8>::new(self.graphics.clone())
-            .with_empty(buffer_size)
-            .with_usage(BufferUsages::COPY_DST | BufferUsages::MAP_READ)
-            .build();
-
-        let mut encoder =
-            inner_graphics
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("texture read encoder"),
-                });
-
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &inner.wgpu_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer.inner.borrow().buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * inner.size.w as u32),
-                    rows_per_image: Some(inner.size.h as u32),
-                },
-            },
-            inner.size.into(),
-        );
-
-        inner_graphics.queue.submit(Some(encoder.finish()));
-
-        // Ensure buffer is available before reading
-        inner_graphics.device.poll(wgpu::Maintain::Wait);
-
-        drop(inner_graphics);
-
-        buffer.read::<T>()
-    }
-}
-
-impl PartialEq for Texture {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl Eq for Texture {}
-
-impl PartialEq for TextureInner {
-    fn eq(&self, other: &Self) -> bool {
-        self.wgpu_texture == other.wgpu_texture &&
-        self.wgpu_view == other.wgpu_view &&
-        self.wgpu_sampler == other.wgpu_sampler &&
-        self.size == other.size &&
-        self.usages == other.usages &&
-        self.sample_count == other.sample_count &&
-        // self.blend == other.blend &&
-        // self.sampler_info == other.sampler_info &&
-        self.format == other.format
-    }
-}
-
-impl Eq for TextureInner {}

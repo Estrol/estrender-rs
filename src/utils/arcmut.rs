@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ArcMut<T> {
     inner: Arc<Mutex<T>>,
 }
@@ -30,7 +30,7 @@ impl<T> ArcMut<T> {
     }
 
     pub fn wait_borrow(&self) -> std::sync::MutexGuard<T> {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         let start = Instant::now();
 
         loop {
@@ -38,10 +38,25 @@ impl<T> ArcMut<T> {
                 return borrow;
             }
 
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
             if start.elapsed() > Duration::from_secs(5) {
                 panic!("wait_borrow: waited more than 5 seconds to acquire borrow");
             }
+        }
+    }
+}
+
+pub mod hasher {
+    use super::ArcMut;
+    use std::{
+        hash::{Hash, Hasher},
+        sync::Arc,
+    };
+
+    impl<T: Hash> Hash for ArcMut<T> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            let ptr = Arc::as_ptr(&self.inner);
+            ptr.hash(state);
         }
     }
 }

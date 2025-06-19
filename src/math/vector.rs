@@ -1,17 +1,21 @@
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 
 use bytemuck::{Pod, Zeroable};
+use num_traits::ToPrimitive;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, Pod, Zeroable)]
+#[derive(Clone, Copy, Default, Pod, Zeroable, Debug)]
 pub struct Vector2 {
     pub x: f32,
     pub y: f32,
 }
 
 impl Vector2 {
-    pub fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
+    pub fn new<T: ToPrimitive>(x: T, y: T) -> Self {
+        Self {
+            x: x.to_f32().unwrap_or(0.0),
+            y: y.to_f32().unwrap_or(0.0),
+        }
     }
 
     pub fn length(&self) -> f32 {
@@ -51,6 +55,15 @@ impl Vector2 {
     pub const DOWN: Self = Self { x: 0.0, y: -1.0 };
     pub const LEFT: Self = Self { x: -1.0, y: 0.0 };
     pub const RIGHT: Self = Self { x: 1.0, y: 0.0 };
+}
+
+impl From<[f32; 2]> for Vector2 {
+    fn from(array: [f32; 2]) -> Self {
+        Self {
+            x: array[0],
+            y: array[1],
+        }
+    }
 }
 
 impl From<(f32, f32)> for Vector2 {
@@ -131,6 +144,28 @@ impl Sub<f32> for Vector2 {
     }
 }
 
+impl Mul<Vector2> for f32 {
+    type Output = Vector2;
+
+    fn mul(self, vector: Vector2) -> Vector2 {
+        Vector2 {
+            x: self * vector.x,
+            y: self * vector.y,
+        }
+    }
+}
+
+impl Div<Vector2> for f32 {
+    type Output = Vector2;
+
+    fn div(self, vector: Vector2) -> Vector2 {
+        Vector2 {
+            x: self / vector.x,
+            y: self / vector.y,
+        }
+    }
+}
+
 impl Mul<f32> for Vector2 {
     type Output = Self;
 
@@ -185,7 +220,7 @@ impl PartialEq for Vector2 {
 impl Eq for Vector2 {}
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Vector3 {
     pub x: f32,
     pub y: f32,
@@ -193,8 +228,12 @@ pub struct Vector3 {
 }
 
 impl Vector3 {
-    pub fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
+    pub fn new<T: ToPrimitive>(x: T, y: T, z: T) -> Self {
+        Self {
+            x: x.to_f32().unwrap_or(0.0),
+            y: y.to_f32().unwrap_or(0.0),
+            z: z.to_f32().unwrap_or(0.0),
+        }
     }
 
     pub fn cross(&self, other: &Self) -> Self {
@@ -271,6 +310,16 @@ impl Default for Vector3 {
             x: 0.0,
             y: 0.0,
             z: 0.0,
+        }
+    }
+}
+
+impl From<[f32; 3]> for Vector3 {
+    fn from(array: [f32; 3]) -> Self {
+        Self {
+            x: array[0],
+            y: array[1],
+            z: array[2],
         }
     }
 }
@@ -394,7 +443,7 @@ impl SubAssign for Vector3 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Vector4 {
     pub x: f32,
     pub y: f32,
@@ -403,8 +452,79 @@ pub struct Vector4 {
 }
 
 impl Vector4 {
-    pub fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
-        Self { x, y, z, w }
+    pub fn new<T: ToPrimitive>(x: T, y: T, z: T, w: T) -> Self {
+        Self {
+            x: x.to_f32().unwrap_or(0.0),
+            y: y.to_f32().unwrap_or(0.0),
+            z: z.to_f32().unwrap_or(0.0),
+            w: w.to_f32().unwrap_or(1.0), // Default w to 1.0
+        }
+    }
+
+    pub fn length(&self) -> f32 {
+        (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt()
+    }
+
+    pub fn normalize(&self) -> Self {
+        let length = self.length();
+        Self {
+            x: self.x / length,
+            y: self.y / length,
+            z: self.z / length,
+            w: self.w / length,
+        }
+    }
+
+    pub fn dot(&self, other: &Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
+    }
+
+    pub fn cross(&self, other: &Self) -> Self {
+        Self {
+            x: self.y * other.z - self.z * other.y,
+            y: self.z * other.x - self.x * other.z,
+            z: self.x * other.y - self.y * other.x,
+            w: 0.0, // Cross product in 4D space is not well-defined, set w to 0
+        }
+    }
+
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0, // Default w to 1.0
+    };
+
+    pub const ONE: Self = Self {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+        w: 1.0, // Default w to 1.0
+    };
+
+    pub const UP: Self = Self {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+        w: 1.0, // Default w to 1.0
+    };
+
+    pub const DOWN: Self = Self {
+        x: 0.0,
+        y: -1.0,
+        z: 0.0,
+        w: 1.0, // Default w to 1.0
+    };
+}
+
+impl Default for Vector4 {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0, // Default w to 1.0
+        }
     }
 }
 
@@ -425,8 +545,11 @@ pub struct Vector2I {
 
 #[allow(dead_code)]
 impl Vector2I {
-    pub fn new(x: i32, y: i32) -> Self {
-        Self { x, y }
+    pub fn new<T: ToPrimitive>(x: T, y: T) -> Self {
+        Self {
+            x: x.to_i32().unwrap_or(0),
+            y: y.to_i32().unwrap_or(0),
+        }
     }
 
     pub const ZERO: Self = Self { x: 0, y: 0 };
@@ -490,8 +613,12 @@ pub struct Vector3I {
 
 #[allow(dead_code)]
 impl Vector3I {
-    pub fn new(x: i32, y: i32, z: i32) -> Self {
-        Self { x, y, z }
+    pub fn new<T: ToPrimitive>(x: T, y: T, z: T) -> Self {
+        Self {
+            x: x.to_i32().unwrap_or(0),
+            y: y.to_i32().unwrap_or(0),
+            z: z.to_i32().unwrap_or(0),
+        }
     }
 
     pub const ZERO: Self = Self { x: 0, y: 0, z: 0 };

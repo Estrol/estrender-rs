@@ -21,17 +21,15 @@ impl Into<wgpu::PrimitiveTopology> for ShaderTopology {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShaderCullMode {
-    None,
     Front,
     Back,
 }
 
-impl Into<Option<wgpu::Face>> for ShaderCullMode {
-    fn into(self) -> Option<wgpu::Face> {
+impl Into<wgpu::Face> for ShaderCullMode {
+    fn into(self) -> wgpu::Face {
         match self {
-            ShaderCullMode::None => None,
-            ShaderCullMode::Front => Some(wgpu::Face::Front),
-            ShaderCullMode::Back => Some(wgpu::Face::Back),
+            ShaderCullMode::Front => wgpu::Face::Front,
+            ShaderCullMode::Back => wgpu::Face::Back,
         }
     }
 }
@@ -85,8 +83,29 @@ pub enum ShaderBindingType {
     StorageBuffer(u32, StorageAccess),
     StorageTexture(StorageAccess),
     Sampler(bool),
-    Texture,
+    Texture(bool),
     PushConstant(u32),
+}
+
+impl std::fmt::Display for ShaderBindingType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShaderBindingType::UniformBuffer(size) => write!(f, "UniformBuffer({})", size),
+            ShaderBindingType::StorageBuffer(size, access) => {
+                write!(f, "StorageBuffer({}, {:?})", size, access)
+            }
+            ShaderBindingType::StorageTexture(access) => {
+                write!(f, "StorageTexture({:?})", access)
+            }
+            ShaderBindingType::Sampler(is_compare) => {
+                write!(f, "Sampler({})", is_compare)
+            }
+            ShaderBindingType::Texture(is_storage) => {
+                write!(f, "Texture({})", is_storage)
+            }
+            ShaderBindingType::PushConstant(size) => write!(f, "PushConstant({})", size),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -208,46 +227,116 @@ pub struct VertexInputAttribute {
     pub format: VertexInputType,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VertexInputDesc<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VertexInputDesc {
     pub stride: u64,
-    pub attributes: &'a [VertexInputAttribute],
+    pub attributes: Vec<VertexInputAttribute>,
 }
 
-impl VertexInputDesc<'_> {
-    pub fn make_attributes(&self) -> Vec<wgpu::VertexAttribute> {
-        self.attributes
-            .iter()
-            .map(|attr| wgpu::VertexAttribute {
-                shader_location: attr.shader_location,
-                offset: attr.offset,
-                format: attr.format.into(),
-            })
-            .collect()
-    }
+#[derive(Debug, Clone, Eq, Hash)]
+pub enum ShaderReflect {
+    Vertex {
+        entry_point: String,
+        input: Option<VertexInputReflection>,
+        bindings: Vec<ShaderBindingInfo>,
+    },
+    Fragment {
+        entry_point: String,
+        bindings: Vec<ShaderBindingInfo>,
+    },
+    VertexFragment {
+        vertex_entry_point: String,
+        vertex_input: Option<VertexInputReflection>,
+        fragment_entry_point: String,
+        bindings: Vec<ShaderBindingInfo>,
+    },
+    Compute {
+        entry_point: String,
+        bindings: Vec<ShaderBindingInfo>,
+    },
+}
 
-    pub fn make<'a>(
-        &self,
-        attributes: &'a [wgpu::VertexAttribute],
-    ) -> wgpu::VertexBufferLayout<'a> {
-        wgpu::VertexBufferLayout {
-            array_stride: self.stride,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes,
+impl PartialEq for ShaderReflect {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                ShaderReflect::Vertex {
+                    entry_point,
+                    input,
+                    bindings,
+                },
+                ShaderReflect::Vertex {
+                    entry_point: other_entry_point,
+                    input: other_input,
+                    bindings: other_bindings,
+                },
+            ) => {
+                entry_point == other_entry_point
+                    && input == other_input
+                    && bindings == other_bindings
+            }
+            (
+                ShaderReflect::Fragment {
+                    entry_point,
+                    bindings,
+                },
+                ShaderReflect::Fragment {
+                    entry_point: other_entry_point,
+                    bindings: other_bindings,
+                },
+            ) => entry_point == other_entry_point && bindings == other_bindings,
+            (
+                ShaderReflect::VertexFragment {
+                    vertex_entry_point,
+                    vertex_input,
+                    fragment_entry_point,
+                    bindings,
+                },
+                ShaderReflect::VertexFragment {
+                    vertex_entry_point: other_vertex_entry_point,
+                    vertex_input: other_vertex_input,
+                    fragment_entry_point: other_fragment_entry_point,
+                    bindings: other_bindings,
+                },
+            ) => {
+                vertex_entry_point == other_vertex_entry_point
+                    && vertex_input == other_vertex_input
+                    && fragment_entry_point == other_fragment_entry_point
+                    && bindings == other_bindings
+            }
+            (
+                ShaderReflect::Compute {
+                    entry_point,
+                    bindings,
+                },
+                ShaderReflect::Compute {
+                    entry_point: other_entry_point,
+                    bindings: other_bindings,
+                },
+            ) => entry_point == other_entry_point && bindings == other_bindings,
+            _ => false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ShaderReflect {
-    pub vertex_entry_point: String,
-    pub fragment_entry_point: String,
-    pub compute_entry_point: String,
-    pub bindings: Vec<ShaderBindingInfo>,
-}
-
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BindGroupLayout {
     pub group: u32,
-    pub binding: u32,
+    pub bindings: Vec<u32>,
     pub layout: wgpu::BindGroupLayout,
+}
+
+#[derive(Debug, Clone, Eq, Hash)]
+pub struct VertexInputReflection {
+    pub name: String,
+    pub stride: u64,
+    pub attributes: Vec<(u32, u64, VertexInputType)>,
+}
+
+impl PartialEq for VertexInputReflection {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.stride == other.stride
+            && self.attributes == other.attributes
+    }
 }

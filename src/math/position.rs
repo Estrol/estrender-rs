@@ -1,3 +1,4 @@
+use num_traits::ToPrimitive;
 use winit::dpi::PhysicalPosition;
 
 #[derive(Clone, Copy, Debug)]
@@ -7,8 +8,11 @@ pub struct Position {
 }
 
 impl Position {
-    pub fn new(x: i32, y: i32) -> Self {
-        Self { x, y }
+    pub fn new<T: ToPrimitive>(x: T, y: T) -> Self {
+        Self {
+            x: x.to_i32().unwrap_or(0),
+            y: y.to_i32().unwrap_or(0),
+        }
     }
 
     pub fn zero() -> Self {

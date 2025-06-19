@@ -9,37 +9,9 @@ Easy to use winit, softbuffer & wgpu abstractions
 * Support for multiple window and multiple software or gpu context or both.
 
 ## Example
-```rs
-use erlib::Engine;
+Examples are available at folder `examples`.
 
-pub fn main() -> Result<(), String> {
-  let mut runner = Engine::make_runner();
-  let window = Engine::make_window("Test Window", Size::new(800, 600), Position::new(0, 0))
-    .build(&mut runner)
-    .unwrap();
-
-  let softcontext = window.create_softbuffer_context().unwrap();
-  let pixels = vec![0x80808080u32; 800 * 600];
-
-  loop {
-    if !runner.pool_events() {
-      break;
-    }
-
-    let result = softcontext.write_pixels(
-      Vector2::Zero,
-      Vector2::new(800.0, 600.0),
-      &pixels,
-      PixelWriteMode::Clear,
-      None
-    );
-
-    if result.is_err() {
-      println("Failed to write pixels: {:?}", result.err())
-    }
-  }
-}
-```
+## Safety
 
 
 ## License

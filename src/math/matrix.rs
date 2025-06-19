@@ -1,8 +1,12 @@
 use std::ops::{Add, Mul, Sub};
 
+use bytemuck::{Pod, Zeroable};
+use num_traits::ToPrimitive;
+
 use super::{Vector2, Vector3, Vector4};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Pod, Zeroable)]
+#[repr(C)]
 pub struct Matrix4 {
     pub m: [[f32; 4]; 4],
 }
@@ -45,7 +49,39 @@ impl Matrix4 {
         }
     }
 
-    pub fn perspective(fov: f32, aspect: f32, near: f32, far: f32) -> Self {
+    pub fn frustum<T: ToPrimitive>(left: T, right: T, bottom: T, top: T, near: T, far: T) -> Self {
+        let left = left.to_f32().unwrap();
+        let right = right.to_f32().unwrap();
+        let bottom = bottom.to_f32().unwrap();
+        let top = top.to_f32().unwrap();
+        let near = near.to_f32().unwrap();
+        let far = far.to_f32().unwrap();
+
+        let rl = 1.0 / (right - left);
+        let bt = 1.0 / (top - bottom);
+        let nf = 1.0 / (near - far);
+
+        Self {
+            m: [
+                [2.0 * near * rl, 0.0, 0.0, 0.0],
+                [0.0, 2.0 * near * bt, 0.0, 0.0],
+                [
+                    (right + left) * rl,
+                    (top + bottom) * bt,
+                    (far + near) * nf,
+                    -1.0,
+                ],
+                [0.0, 0.0, 2.0 * far * near * nf, 0.0],
+            ],
+        }
+    }
+
+    pub fn perspective<T: ToPrimitive>(fov: T, aspect: T, near: T, far: T) -> Self {
+        let fov = fov.to_f32().unwrap();
+        let aspect = aspect.to_f32().unwrap();
+        let near = near.to_f32().unwrap();
+        let far = far.to_f32().unwrap();
+
         let f = 1.0 / (fov / 2.0).tan();
         let nf = 1.0 / (near - far);
 
@@ -59,7 +95,11 @@ impl Matrix4 {
         }
     }
 
-    pub fn translate(x: f32, y: f32, z: f32) -> Self {
+    pub fn translate<T: ToPrimitive>(x: T, y: T, z: T) -> Self {
+        let x = x.to_f32().unwrap();
+        let y = y.to_f32().unwrap();
+        let z = z.to_f32().unwrap();
+
         Self {
             m: [
                 [1.0, 0.0, 0.0, x],
@@ -70,7 +110,11 @@ impl Matrix4 {
         }
     }
 
-    pub fn scale(x: f32, y: f32, z: f32) -> Self {
+    pub fn scale<T: ToPrimitive>(x: T, y: T, z: T) -> Self {
+        let x = x.to_f32().unwrap();
+        let y = y.to_f32().unwrap();
+        let z = z.to_f32().unwrap();
+
         Self {
             m: [
                 [x, 0.0, 0.0, 0.0],
@@ -81,7 +125,21 @@ impl Matrix4 {
         }
     }
 
-    pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+    pub fn orthographic<T: ToPrimitive>(
+        left: T,
+        right: T,
+        bottom: T,
+        top: T,
+        near: T,
+        far: T,
+    ) -> Self {
+        let left = left.to_f32().unwrap();
+        let right = right.to_f32().unwrap();
+        let bottom = bottom.to_f32().unwrap();
+        let top = top.to_f32().unwrap();
+        let near = near.to_f32().unwrap();
+        let far = far.to_f32().unwrap();
+
         let lr = 1.0 / (left - right);
         let bt = 1.0 / (bottom - top);
         let nf = 1.0 / (near - far);
@@ -96,43 +154,42 @@ impl Matrix4 {
         }
     }
 
-    pub fn rotate_x(angle: f32) -> Self {
+    pub fn rotate<T: ToPrimitive>(angle: T, x: T, y: T, z: T) -> Self {
+        let angle = angle.to_f32().unwrap();
+        let x = x.to_f32().unwrap();
+        let y = y.to_f32().unwrap();
+        let z = z.to_f32().unwrap();
+
         let c = angle.cos();
         let s = angle.sin();
+        let len = (x * x + y * y + z * z).sqrt();
+        let (x, y, z) = if len == 0.0 {
+            (1.0, 0.0, 0.0)
+        } else {
+            (x / len, y / len, z / len)
+        };
+        let omc = 1.0 - c;
 
         Self {
             m: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, c, -s, 0.0],
-                [0.0, s, c, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-        }
-    }
-
-    pub fn rotate_y(angle: f32) -> Self {
-        let c = angle.cos();
-        let s = angle.sin();
-
-        Self {
-            m: [
-                [c, 0.0, s, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [-s, 0.0, c, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-        }
-    }
-
-    pub fn rotate_z(angle: f32) -> Self {
-        let c = angle.cos();
-        let s = angle.sin();
-
-        Self {
-            m: [
-                [c, -s, 0.0, 0.0],
-                [s, c, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
+                [
+                    x * x * omc + c,
+                    x * y * omc - z * s,
+                    x * z * omc + y * s,
+                    0.0,
+                ],
+                [
+                    y * x * omc + z * s,
+                    y * y * omc + c,
+                    y * z * omc - x * s,
+                    0.0,
+                ],
+                [
+                    z * x * omc - y * s,
+                    z * y * omc + x * s,
+                    z * z * omc + c,
+                    0.0,
+                ],
                 [0.0, 0.0, 0.0, 1.0],
             ],
         }
