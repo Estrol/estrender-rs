@@ -6,11 +6,11 @@ use std::{
 
 use byteorder_lite::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use flate2::bufread::ZlibDecoder;
-use gpu::GPUFont;
+// use gpu::GPUFont;
 
-use crate::{math::Vector2, prelude::GPU, utils::ArcRef};
+use crate::{math::Vector2, utils::ArcRef};
 
-mod gpu;
+// mod gpu;
 mod system;
 
 #[derive(Clone, Copy, Debug)]
@@ -481,9 +481,9 @@ impl Font {
         )
     }
 
-    pub fn create_gpu(&self, gpu: &mut GPU) -> Result<GPUFont, String> {
-        GPUFont::new(self, gpu)
-    }
+    // pub fn create_gpu(&self, gpu: &mut GPU) -> Result<GPUFont, String> {
+    //     GPUFont::new(self, gpu)
+    // }
 }
 
 #[derive(Clone, Debug)]

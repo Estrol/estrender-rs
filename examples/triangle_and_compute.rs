@@ -153,7 +153,6 @@ fn main() {
         .build()
         .expect("Failed to create index buffer");
 
-    let mut cursor_pos = Vector2::new(0.0, 0.0);
     while runner.pool_events(PollMode::WaitDraw) {
         for event in runner.get_events() {
             match event {
@@ -177,9 +176,6 @@ fn main() {
                         .with_sample_count(SampleCount::SampleCount4)
                         .build()
                         .expect("Failed to resize MSAA texture");
-                }
-                Event::CursorMoved { window_id: _, pos } => {
-                    cursor_pos = Vector2::new(pos.x as f32, pos.y as f32);
                 }
                 Event::RedrawRequested { window_id: _ } => {
                     if let Some(mut cmd) = gpu.begin_command() {

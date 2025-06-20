@@ -7,12 +7,12 @@ use crate::{
 };
 
 mod inner;
-mod input;
+// mod input;
 mod pixel_buffer;
 mod runner;
 
 pub(crate) use inner::*;
-pub use input::*;
+// pub use input::*;
 pub use runner::*;
 
 #[cfg(feature = "software")]

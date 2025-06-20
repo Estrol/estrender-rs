@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 use winit::{
     event,
     event_loop::{EventLoop, EventLoopProxy},
-    keyboard::{Key, NativeKey},
+    keyboard::{Key, NamedKey, NativeKey},
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
 };
 
@@ -25,13 +25,11 @@ use crate::{
     dbg_log,
     math::{Point2, Timing},
     utils::{ArcMut, ArcRef},
-    window::named_key_to_str,
 };
 
 use super::{
-    Handle, InnerAttribute, Input, Window,
+    Handle, InnerAttribute, Window,
     inner::{self, WindowEvent},
-    input::InputInner,
 };
 
 // This is the most laziest workaround to able construct multiple event loops
@@ -61,7 +59,7 @@ pub struct Runner {
     pub(crate) event_loop: ArcRef<EventLoop<WindowEvent>>,
     pub(crate) event_loop_proxy: EventLoopProxy<WindowEvent>,
     pub(crate) window_events_attributes: Vec<ArcRef<InnerAttribute>>,
-    pub(crate) input_events: Vec<ArcRef<InputInner>>,
+    // pub(crate) input_events: Vec<ArcRef<InputInner>>,
     pub(crate) rate_timing: Timing,
     pub(crate) pending_events: Vec<Event>,
 }
@@ -291,7 +289,7 @@ impl Runner {
             event_loop,
             event_loop_proxy,
             window_events_attributes: Vec::new(),
-            input_events: Vec::new(),
+            // input_events: Vec::new(),
             rate_timing: Timing::new(60),
             pending_events: Vec::new(),
         })
@@ -335,9 +333,9 @@ impl Runner {
     ///    println!("Key A is pressed");
     /// }
     /// ```
-    pub fn make_input(&mut self, window: &Window) -> Input {
-        Input::new(self, window)
-    }
+    // pub fn make_input(&mut self, window: &Window) -> Input {
+    //     Input::new(self, window)
+    // }
 
     pub(crate) fn internal_new_window(
         &mut self,
@@ -711,5 +709,54 @@ impl<'a> WindowBuilder<'a> {
             self.size,
             self.pos,
         )
+    }
+}
+
+pub(crate) fn named_key_to_str(key: &NamedKey) -> Option<SmolStr> {
+    match key {
+        NamedKey::Alt => Some(SmolStr::new("Alt")),
+        NamedKey::AltGraph => Some(SmolStr::new("AltGraph")),
+        NamedKey::CapsLock => Some(SmolStr::new("CapsLock")),
+        NamedKey::Control => Some(SmolStr::new("Control")),
+        NamedKey::Fn => Some(SmolStr::new("Fn")),
+        NamedKey::FnLock => Some(SmolStr::new("FnLock")),
+        NamedKey::NumLock => Some(SmolStr::new("NumLock")),
+        NamedKey::ScrollLock => Some(SmolStr::new("ScrollLock")),
+        NamedKey::Shift => Some(SmolStr::new("Shift")),
+        NamedKey::Symbol => Some(SmolStr::new("Symbol")),
+        NamedKey::SymbolLock => Some(SmolStr::new("SymbolLock")),
+        NamedKey::Meta => Some(SmolStr::new("Meta")),
+        NamedKey::Hyper => Some(SmolStr::new("Hyper")),
+        NamedKey::Super => Some(SmolStr::new("Super")),
+        NamedKey::Enter => Some(SmolStr::new("Enter")),
+        NamedKey::Tab => Some(SmolStr::new("Tab")),
+        NamedKey::Space => Some(SmolStr::new("Space")),
+        NamedKey::ArrowDown => Some(SmolStr::new("ArrowDown")),
+        NamedKey::ArrowLeft => Some(SmolStr::new("ArrowLeft")),
+        NamedKey::ArrowRight => Some(SmolStr::new("ArrowRight")),
+        NamedKey::ArrowUp => Some(SmolStr::new("ArrowUp")),
+        NamedKey::End => Some(SmolStr::new("End")),
+        NamedKey::Home => Some(SmolStr::new("Home")),
+        NamedKey::PageDown => Some(SmolStr::new("PageDown")),
+        NamedKey::PageUp => Some(SmolStr::new("PageUp")),
+        NamedKey::Backspace => Some(SmolStr::new("Backspace")),
+        NamedKey::Clear => Some(SmolStr::new("Clear")),
+        NamedKey::Delete => Some(SmolStr::new("Delete")),
+        NamedKey::Insert => Some(SmolStr::new("Insert")),
+        NamedKey::Escape => Some(SmolStr::new("Escape")),
+        NamedKey::Pause => Some(SmolStr::new("Pause")),
+        NamedKey::F1 => Some(SmolStr::new("F1")),
+        NamedKey::F2 => Some(SmolStr::new("F2")),
+        NamedKey::F3 => Some(SmolStr::new("F3")),
+        NamedKey::F4 => Some(SmolStr::new("F4")),
+        NamedKey::F5 => Some(SmolStr::new("F5")),
+        NamedKey::F6 => Some(SmolStr::new("F6")),
+        NamedKey::F7 => Some(SmolStr::new("F7")),
+        NamedKey::F8 => Some(SmolStr::new("F8")),
+        NamedKey::F9 => Some(SmolStr::new("F9")),
+        NamedKey::F10 => Some(SmolStr::new("F10")),
+        NamedKey::F11 => Some(SmolStr::new("F11")),
+        NamedKey::F12 => Some(SmolStr::new("F12")),
+        _ => None,
     }
 }
