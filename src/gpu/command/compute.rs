@@ -8,10 +8,8 @@ use wgpu::CommandEncoder;
 #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
 use crate::gpu::ShaderReflect;
 use crate::{
-    dbg_log,
     gpu::{
-        BindGroupCreateInfo, BindGroupLayout, backed_command::BakedComputePass,
-        pipeline_manager::ComputePipelineDesc, shader::ComputeShader,
+        pipeline_manager::ComputePipelineDesc, shader::ComputeShader, BindGroupCreateInfo, BindGroupLayout, ComputePipeline
     },
     prelude::{Buffer, BufferUsages, GPUInner, ShaderBindingType},
     utils::ArcRef,
@@ -20,10 +18,16 @@ use crate::{
 use super::{BindGroupAttachment, BindGroupType};
 
 #[derive(Clone, Debug, Hash)]
-pub(crate) struct ComputeShaderBinding {
+pub(crate) struct IntermediateComputeBinding {
     pub shader: wgpu::ShaderModule,
     pub layout: Vec<BindGroupLayout>,
     pub entry_point: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ComputeShaderBinding {
+    Intermediate(IntermediateComputeBinding),
+    Pipeline(ComputePipeline),
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +70,8 @@ impl ComputePass {
     }
 
     pub fn set_shader(&mut self, shader: Option<&ComputeShader>) {
+        let mut inner = self.inner.borrow_mut();
+
         match shader {
             Some(shader) => {
                 let shader_inner = shader.inner.borrow();
@@ -84,16 +90,29 @@ impl ComputePass {
 
                 let layout = shader_inner.bind_group_layouts.clone();
 
-                let shader_binding = ComputeShaderBinding {
+                let shader_binding = IntermediateComputeBinding {
                     shader: shader_inner.shader.clone(),
                     layout,
                     entry_point: shader_entry_point,
                 };
 
-                self.inner.borrow_mut().shader = Some(shader_binding);
+                inner.shader = Some(ComputeShaderBinding::Intermediate(shader_binding));
             }
             None => {
-                self.inner.borrow_mut().shader = None;
+                inner.shader = None;
+            }
+        }
+    }
+
+    pub fn set_pipeline(&mut self, pipeline: Option<&ComputePipeline>) {
+        let mut inner = self.inner.borrow_mut();
+
+        match pipeline {
+            Some(pipeline) => {
+                inner.shader = Some(ComputeShaderBinding::Pipeline(pipeline.clone()));
+            }
+            None => {
+                inner.shader = None;
             }
         }
     }
@@ -225,6 +244,13 @@ impl ComputePass {
                 panic!("Shader is not set");
             }
 
+            match &inner.shader {
+                Some(ComputeShaderBinding::Pipeline(_)) => {
+                    panic!("Cannot insert or replace attachment when using a pipeline shader");
+                }
+                _ => {}
+            }
+
             let reflection = inner.reflection.as_ref().unwrap();
 
             let r#type = match reflection {
@@ -339,168 +365,157 @@ impl ComputePass {
     fn prepare_pipeline(&self) -> (wgpu::ComputePipeline, Vec<(u32, wgpu::BindGroup)>) {
         let inner = self.inner.borrow();
 
-        let shader_binding = inner
-            .shader
-            .as_ref()
-            .expect("Shader must be set before preparing pipeline");
+        match &inner.shader {
+            Some(ComputeShaderBinding::Intermediate(shader_binding)) => {
+                let bind_group_hash_key = {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    hasher.write_u64(1u64); // Compute shader hash id.
 
-        let bind_group_hash_key = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            hasher.write_u64(1u64); // Compute shader hash id.
+                    for attachment in &inner.attachments {
+                        attachment.group.hash(&mut hasher);
+                        attachment.binding.hash(&mut hasher);
 
-            for attachment in &inner.attachments {
-                attachment.group.hash(&mut hasher);
-                attachment.binding.hash(&mut hasher);
-
-                match &attachment.attachment {
-                    BindGroupType::Uniform(buffer) => {
-                        buffer.hash(&mut hasher);
+                        match &attachment.attachment {
+                            BindGroupType::Uniform(buffer) => {
+                                buffer.hash(&mut hasher);
+                            }
+                            BindGroupType::Storage(buffer) => {
+                                buffer.hash(&mut hasher);
+                            }
+                            BindGroupType::TextureStorage(texture) => {
+                                texture.hash(&mut hasher);
+                            }
+                            BindGroupType::Sampler(sampler) => {
+                                sampler.hash(&mut hasher);
+                            }
+                            BindGroupType::Texture(texture) => {
+                                texture.hash(&mut hasher);
+                            }
+                        }
                     }
-                    BindGroupType::Storage(buffer) => {
-                        buffer.hash(&mut hasher);
-                    }
-                    BindGroupType::TextureStorage(texture) => {
-                        texture.hash(&mut hasher);
-                    }
-                    BindGroupType::Sampler(sampler) => {
-                        sampler.hash(&mut hasher);
-                    }
-                    BindGroupType::Texture(texture) => {
-                        texture.hash(&mut hasher);
-                    }
-                }
-            }
 
-            hasher.finish()
-        };
+                    hasher.finish()
+                };
 
-        let bind_group_attachments = {
-            let mut gpu_inner = self.graphics.borrow_mut();
+                let bind_group_attachments = {
+                    let mut gpu_inner = self.graphics.borrow_mut();
 
-            match gpu_inner.get_bind_group(bind_group_hash_key) {
-                Some(bind_group) => bind_group,
-                None => {
-                    let mut bind_group_attachments: HashMap<u32, Vec<wgpu::BindGroupEntry>> =
-                        inner.attachments.iter().fold(HashMap::new(), |mut map, e| {
-                            let (group, binding, attachment) = (e.group, e.binding, &e.attachment);
+                    match gpu_inner.get_bind_group(bind_group_hash_key) {
+                        Some(bind_group) => bind_group,
+                        None => {
+                            let mut bind_group_attachments: HashMap<
+                                u32, 
+                                Vec<wgpu::BindGroupEntry>
+                            > = inner.attachments.iter().fold(HashMap::new(), |mut map, e| {
+                                let (group, binding, attachment) = (e.group, e.binding, &e.attachment);
 
-                            let entry = match attachment {
-                                BindGroupType::TextureStorage(texture) => wgpu::BindGroupEntry {
-                                    binding,
-                                    resource: wgpu::BindingResource::TextureView(texture),
-                                },
-                                BindGroupType::Storage(buffer) => wgpu::BindGroupEntry {
-                                    binding,
-                                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                        buffer,
-                                        offset: 0,
-                                        size: None,
-                                    }),
-                                },
-                                _ => panic!("Unsupported bind group type"),
+                                let entry = match attachment {
+                                    BindGroupType::TextureStorage(texture) => wgpu::BindGroupEntry {
+                                        binding,
+                                        resource: wgpu::BindingResource::TextureView(texture),
+                                    },
+                                    BindGroupType::Storage(buffer) => wgpu::BindGroupEntry {
+                                        binding,
+                                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                            buffer,
+                                            offset: 0,
+                                            size: None,
+                                        }),
+                                    },
+                                    _ => panic!("Unsupported bind group type"),
+                                };
+
+                                map.entry(group).or_insert_with(Vec::new).push(entry);
+                                map
+                            });
+
+                            // sort each group attachments
+                            // group, binding
+                            // this is important for the bind group to be created in the correct order
+                            for entries in bind_group_attachments.values_mut() {
+                                entries.sort_by_key(|e| e.binding);
+                            }
+
+                            let bind_group = bind_group_attachments
+                                .iter()
+                                .map(|(group, entries)| {
+                                    let layout = shader_binding
+                                        .layout
+                                        .iter()
+                                        .find(|l| l.group == *group)
+                                        .unwrap();
+
+                                    (layout, entries.as_slice())
+                                })
+                                .collect::<Vec<_>>();
+
+                            let create_info = BindGroupCreateInfo {
+                                entries: bind_group,
                             };
 
-                            map.entry(group).or_insert_with(Vec::new).push(entry);
-                            map
-                        });
-
-                    // sort each group attachments
-                    // group, binding
-                    // this is important for the bind group to be created in the correct order
-                    for entries in bind_group_attachments.values_mut() {
-                        entries.sort_by_key(|e| e.binding);
+                            gpu_inner.create_bind_group(bind_group_hash_key, create_info)
+                        }
                     }
+                };
 
-                    let bind_group = bind_group_attachments
-                        .iter()
-                        .map(|(group, entries)| {
-                            let layout = shader_binding
+                let pipeline_hash_key = {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    shader_binding.hash(&mut hasher);
+
+                    hasher.finish()
+                };
+
+                let pipeline = {
+                    let mut gpu_inner = self.graphics.borrow_mut();
+
+                    match gpu_inner.get_compute_pipeline(pipeline_hash_key) {
+                        Some(pipeline) => pipeline,
+                        None => {
+                            let bind_group_layout = shader_binding
                                 .layout
                                 .iter()
-                                .find(|l| l.group == *group)
-                                .unwrap();
+                                .map(|l| l.layout.clone())
+                                .collect::<Vec<_>>();
 
-                            (layout, entries.as_slice())
-                        })
-                        .collect::<Vec<_>>();
+                            let entry_point = shader_binding.entry_point.as_str();
 
-                    let create_info = BindGroupCreateInfo {
-                        entries: bind_group,
-                    };
+                            let pipeline_desc = ComputePipelineDesc {
+                                shader_module: shader_binding.shader.clone(),
+                                entry_point: entry_point.to_owned(),
+                                bind_group_layout,
+                            };
 
-                    gpu_inner.create_bind_group(bind_group_hash_key, create_info)
-                }
+                            gpu_inner.create_compute_pipeline(pipeline_hash_key, pipeline_desc)
+                        }
+                    }
+                };
+
+                (pipeline, bind_group_attachments)
             }
-        };
+            Some(ComputeShaderBinding::Pipeline(pipeline)) => {
+                let pipeline_hash_key = {
+                    let mut hasher = DefaultHasher::new();
+                    pipeline.pipeline_desc.hash(&mut hasher);
 
-        let pipeline_hash_key = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            shader_binding.hash(&mut hasher);
+                    hasher.finish()
+                };
 
-            hasher.finish()
-        };
+                let wgpu_pipeline = {
+                    let mut gpu_inner = self.graphics.borrow_mut();
 
-        let pipeline = {
-            let mut gpu_inner = self.graphics.borrow_mut();
+                    match gpu_inner.get_compute_pipeline(pipeline_hash_key) {
+                        Some(pipeline) => pipeline,
+                        None => gpu_inner.create_compute_pipeline(pipeline_hash_key, pipeline.pipeline_desc.clone()),
+                    }
+                };
 
-            match gpu_inner.get_compute_pipeline(pipeline_hash_key) {
-                Some(pipeline) => pipeline,
-                None => {
-                    let bind_group_layout = shader_binding
-                        .layout
-                        .iter()
-                        .map(|l| l.layout.clone())
-                        .collect::<Vec<_>>();
-
-                    let entry_point = shader_binding.entry_point.as_str();
-
-                    let pipeline_desc = ComputePipelineDesc {
-                        shader_module: shader_binding.shader.clone(),
-                        entry_point: entry_point.to_owned(),
-                        bind_group_layout,
-                    };
-
-                    gpu_inner.create_compute_pipeline(pipeline_hash_key, pipeline_desc)
-                }
+                (wgpu_pipeline, pipeline.bind_group.clone())
             }
-        };
-
-        (pipeline, bind_group_attachments)
-    }
-
-    pub fn dispatch_baked(&mut self, baked: &BakedComputePass) {
-        let pipeline_desc = baked.pipeline.clone();
-        let mut inner = self.inner.borrow_mut();
-
-        let pipeline_hash_key = {
-            let mut hasher = DefaultHasher::new();
-            pipeline_desc.hash(&mut hasher);
-
-            hasher.finish()
-        };
-
-        let pipeline = {
-            let mut gpu_inner = self.graphics.borrow_mut();
-
-            match gpu_inner.get_compute_pipeline(pipeline_hash_key) {
-                Some(pipeline) => pipeline,
-                None => gpu_inner.create_compute_pipeline(pipeline_hash_key, pipeline_desc),
+            None => {
+                panic!("Compute shader or pipeline must be set before dispatching");
             }
-        };
-
-        let queue = ComputePassQueue {
-            pipeline,
-            bind_group: baked.bind_group.clone(),
-            ty: DispatchType::Dispatch {
-                x: baked.dispatch.0,
-                y: baked.dispatch.1,
-                z: baked.dispatch.2,
-            },
-            push_constant: inner.push_constant.clone(),
-            debug: None,
-        };
-
-        inner.queues.push(queue);
+        }
+        
     }
 
     fn end(&mut self) {

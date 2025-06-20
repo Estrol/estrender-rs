@@ -68,6 +68,7 @@ impl InnerAttribute {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Window {
     pub(crate) inner: ArcRef<InnerAttribute>,
     pub(crate) timing: Timing,
@@ -123,14 +124,23 @@ impl Window {
         })
     }
 
+    /// Get the window ID of this window.
+    /// 
+    /// This is a unique identifier for the window, useful
+    /// for identifying the window in event handling and other operations.
     pub fn id(&self) -> usize {
         self.inner.wait_borrow().window_id
     }
 
+    /// Get the size of the window.
+    /// 
+    /// This useful for determining the dimensions of the window, such
+    /// as when rendering content or handling layout.
     pub fn size(&self) -> Point2 {
         self.inner.wait_borrow().size
     }
 
+    /// Send quit event to the runner to close the window.
     pub fn quit(&self) {
         let inner = self.inner.wait_borrow();
 
@@ -151,6 +161,7 @@ impl Window {
         self.timing.get_frame_time()
     }
 
+    /// Set the title of the window.
     pub fn set_title(&mut self, title: &str) {
         let inner = self.inner.wait_borrow();
 
@@ -160,6 +171,7 @@ impl Window {
         });
     }
 
+    /// Set the cursor icon for the window.
     pub fn set_cursor(&mut self, cursor: Option<CursorIcon>) {
         let inner = self.inner.wait_borrow();
 
@@ -169,8 +181,7 @@ impl Window {
         });
     }
 
-    /// Set the size of the window. \
-    /// This will resize the window to the specified size.
+    /// Set the window size.
     pub fn set_size(&mut self, size: Size) {
         let inner = self.inner.wait_borrow();
 
@@ -180,8 +191,7 @@ impl Window {
         });
     }
 
-    /// Set the position of the window. \
-    /// This will move the window to the specified position.
+    /// Set the widnow position.
     pub fn set_position(&mut self, pos: Position) {
         let inner = self.inner.wait_borrow();
 
@@ -191,22 +201,13 @@ impl Window {
         });
     }
 
-    /// Request a redraw of the window. \
-    /// This is useful when you want to manually trigger a redraw of the window, \
-    /// for example, when you have made changes to the window that need to be reflected on the screen.
-    /// and the runner is in [RunMode::ReDraw].
+    /// Request a redraw of the window.
     pub fn request_redraw(&mut self) {
         let inner = self.inner.wait_borrow();
 
         _ = inner.proxy.send_event(WindowEvent::Redraw {
             ref_id: inner.window_id,
         });
-    }
-
-    /// Get window events that have been processed by the event loop for this window. \
-    /// This will return a vector of events that have been processed since the last call to this method.
-    pub fn get_events(&self) -> Vec<Event> {
-        unimplemented!()
     }
 }
 

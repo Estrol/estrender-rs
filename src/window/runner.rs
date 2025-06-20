@@ -571,11 +571,11 @@ impl Runner {
                         }
                     }
 
-                    for input in self.input_events.iter() {
-                        if let Some(mut input) = input.try_borrow_mut() {
-                            input.process_event();
-                        }
-                    }
+                    // for input in self.input_events.iter() {
+                    //     if let Some(mut input) = input.try_borrow_mut() {
+                    //         input.process_event();
+                    //     }
+                    // }
                 }
                 PumpStatus::Exit(code) => {
                     // Exit the event loop

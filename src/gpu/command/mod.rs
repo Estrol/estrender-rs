@@ -1,6 +1,6 @@
 use wgpu::CommandEncoder;
 
-use crate::{dbg_log, log, math::Point2, utils::ArcRef, warn_log};
+use crate::{dbg_log, log, math::Point2, utils::ArcRef};
 
 use super::{
     SwapchainError, TextureUsage,
@@ -12,11 +12,9 @@ use super::{
 pub(crate) mod compute;
 pub(crate) mod drawing;
 pub(crate) mod graphics;
-pub(crate) mod pipeline;
 
 pub use compute::*;
 pub use graphics::*;
-pub use pipeline::*;
 
 pub enum PassAttachment {
     Texture(Texture, TextureBlend),
@@ -170,7 +168,7 @@ impl CommandBuffer {
     }
 
     /// Begins a new compute pass.
-    pub fn begin_compute(&mut self) -> Option<ComputePass> {
+    pub fn begin_computepass(&mut self) -> Option<ComputePass> {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         if self.on_renderpass || self.on_compute {
             panic!("CMD already in a render pass or compute pass");

@@ -3,7 +3,6 @@ use crate::{
     window::Handle,
 };
 
-mod backed_command;
 mod bind_group_manager;
 mod buffer;
 mod command;
@@ -11,11 +10,13 @@ mod inner;
 mod pipeline_manager;
 mod shader;
 mod texture;
+mod pipeline;
 
 pub use buffer::*;
 pub use command::*;
 pub use shader::*;
 pub use texture::*;
+pub use pipeline::*;
 
 pub(crate) use bind_group_manager::*;
 // pub(crate) use buffer_manager::*;
@@ -126,12 +127,17 @@ impl GPU {
     }
 
     /// Set the swapchain vsync.
-    pub fn set_vsync(&self, vsync: bool) {
+    pub fn set_vsync(&mut self, vsync: bool) {
         let mut inner = self.inner.borrow_mut();
         inner.set_vsync(vsync);
     }
 
-    pub fn set_panic_callback<F>(&self, _callback: F)
+    pub fn is_vsync(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner.is_vsync()
+    }
+
+    pub fn set_panic_callback<F>(&mut self, _callback: F)
     where
         F: Fn(&str) + Send + Sync + 'static,
     {
@@ -139,16 +145,8 @@ impl GPU {
     }
 
     /// Begins a new command buffer.
-    pub fn begin_command(&self) -> Option<command::CommandBuffer> {
+    pub fn begin_command(&mut self) -> Option<command::CommandBuffer> {
         Some(command::CommandBuffer::new(self.inner.clone()))
-    }
-
-    pub fn begin_baked_compute_pass(&self) -> Option<backed_command::ComputepassRecorder> {
-        Some(backed_command::ComputepassRecorder::new(self.inner.clone()))
-    }
-
-    pub fn begin_baked_graphics_pass(&self) -> Option<backed_command::RenderpassRecorder> {
-        Some(backed_command::RenderpassRecorder::new(self.inner.clone()))
     }
 
     /// Begins a new command buffer with a surface texture.
@@ -156,7 +154,7 @@ impl GPU {
     /// This is useful if you reuse the surface texture from previous command buffer, but
     /// not yet presented to the screen.
     pub fn begin_command_with_surface(
-        &self,
+        &mut self,
         surface: SurfaceTexture,
     ) -> Option<command::CommandBuffer> {
         Some(command::CommandBuffer::new_with_surface(
@@ -166,33 +164,39 @@ impl GPU {
     }
 
     /// Create a new texture.
-    pub fn create_texture(&self) -> texture::TextureBuilder {
+    pub fn create_texture(&mut self) -> texture::TextureBuilder {
         texture::TextureBuilder::new(self.inner.clone())
     }
 
     /// Create a new graphics shader.
-    pub fn create_graphics_shader(&self) -> shader::GraphicsShaderBuilder {
+    pub fn create_graphics_shader(&mut self) -> shader::GraphicsShaderBuilder {
         shader::GraphicsShaderBuilder::new(self.inner.clone())
     }
 
     /// Create a new compute shader.
-    pub fn create_compute_shader(&self) -> shader::ComputeShaderBuilder {
+    pub fn create_compute_shader(&mut self) -> shader::ComputeShaderBuilder {
         shader::ComputeShaderBuilder::new(self.inner.clone())
     }
 
-    /// Create a new bind group.
-    pub fn create_buffer<T: bytemuck::Pod + bytemuck::Zeroable>(&self) -> buffer::BufferBuilder<T> {
+    /// Create a new buffer.
+    pub fn create_buffer<T: bytemuck::Pod + bytemuck::Zeroable>(&mut self) -> buffer::BufferBuilder<T> {
         buffer::BufferBuilder::new(self.inner.clone())
     }
 
-    pub fn create_render_pipeline(&self) -> command::pipeline::RenderPipelineBuilder {
-        command::pipeline::RenderPipelineBuilder::new(self.inner.clone())
+    /// Create a render pipeline.
+    pub fn create_render_pipeline(&mut self) -> pipeline::RenderPipelineBuilder {
+        pipeline::RenderPipelineBuilder::new(self.inner.clone())
+    }
+
+    /// Create a compute pipeline.
+    pub fn create_compute_pipeline(&mut self) -> pipeline::ComputePipelineBuilder {
+        pipeline::ComputePipelineBuilder::new(self.inner.clone())
     }
 
     /// Wait for the GPU to finish processing commands.
-    pub fn wait(&self, _wait_type: GPUWaitType) {
+    pub fn wait(&mut self, wait_type: GPUWaitType) {
         let inner = self.inner.borrow();
-        let poll_type = match _wait_type {
+        let poll_type = match wait_type {
             GPUWaitType::Wait => wgpu::PollType::Wait,
             GPUWaitType::Poll => wgpu::PollType::Poll,
         };

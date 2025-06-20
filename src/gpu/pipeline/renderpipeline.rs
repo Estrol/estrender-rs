@@ -1,78 +1,75 @@
 use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
-    ops::Range,
 };
 
-use wgpu::{ColorWrites, TextureFormat};
-
 use crate::{
-    dbg_log,
     gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, GPUInner,
-        GraphicsPipelineDesc, GraphicsShader, GraphicsShaderBinding, IndexBufferSize,
-        ShaderCullMode, ShaderFrontFace, ShaderPollygonMode, ShaderReflect, ShaderTopology,
-        ShaderType, Texture, TextureBlend, TextureSampler, VertexAttributeLayout,
+        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, GPUInner, GraphicsPipelineDesc, GraphicsShader, IntermediateRenderPipeline, IndexBufferSize, ShaderBindingType, ShaderCullMode, ShaderFrontFace, ShaderPollygonMode, ShaderReflect, ShaderTopology, ShaderType, Texture, TextureBlend, TextureSampler, VertexAttributeLayout
     },
     utils::ArcRef,
 };
 
-#[derive(Clone, Debug)]
-pub struct BakedRenderpass {
+#[derive(Debug, Clone, Hash)]
+pub struct RenderPipeline {
     pub(crate) bind_group: Vec<(u32, wgpu::BindGroup)>,
     pub(crate) pipeline_desc: GraphicsPipelineDesc,
-    pub(crate) vertices: wgpu::Buffer,
-    pub(crate) indices: Option<wgpu::Buffer>,
-    pub(crate) itype: Option<wgpu::IndexFormat>,
-    pub(crate) num_to_draw: Range<u32>,
-    pub(crate) num_of_instances: u32,
+    pub(crate) index_format: Option<IndexBufferSize>,
 }
 
-#[derive(Clone, Debug)]
-pub struct RenderpassRecorder {
-    pub(crate) graphics: ArcRef<GPUInner>,
-    pub(crate) shader: Option<GraphicsShaderBinding>,
+#[derive(Debug, Clone)]
+pub struct RenderPipelineBuilder {
+    pub(crate) gpu: ArcRef<GPUInner>,
     pub(crate) attachments: Vec<BindGroupAttachment>,
-    pub(crate) vertex_buffer: Option<wgpu::Buffer>,
-    pub(crate) index_buffer: Option<wgpu::Buffer>,
+    pub(crate) shader: Option<IntermediateRenderPipeline>,
     pub(crate) blend: Option<wgpu::BlendState>,
     pub(crate) color_write_mask: Option<wgpu::ColorWrites>,
-
-    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
     pub(crate) shader_reflection: Option<Vec<ShaderReflect>>,
 }
 
-impl RenderpassRecorder {
-    pub(crate) fn new(graphics: ArcRef<GPUInner>) -> Self {
+impl RenderPipelineBuilder {
+    pub(crate) fn new(gpu: ArcRef<GPUInner>) -> Self {
         Self {
-            graphics,
-            shader: None,
+            gpu,
             attachments: Vec::new(),
-            vertex_buffer: None,
-            index_buffer: None,
+            shader: None,
             blend: None,
-            color_write_mask: Some(ColorWrites::COLOR),
-
-            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+            color_write_mask: None,
             shader_reflection: None,
         }
     }
 
     #[inline]
-    pub fn set_shader(&mut self, shader: Option<&GraphicsShader>) {
-        self.set_shader_ex(shader, None, None, None, None, None);
+    pub fn set_blend(mut self, blend: Option<&TextureBlend>) -> Self {
+        match blend {
+            Some(blend) => {
+                self.blend = Some(blend.clone().into());
+                self.color_write_mask = Some(blend.clone().into());
+            }
+            None => {
+                self.blend = None;
+                self.color_write_mask = None;
+            }
+        }
+
+        self
     }
 
     #[inline]
-    pub fn set_shader_ex(
-        &mut self,
+    pub fn set_shader(self, shader: Option<&GraphicsShader>) -> Self {
+        self.set_shader_with_options(shader, None, None, None, None, None)
+    }
+
+    #[inline]
+    pub fn set_shader_with_options(
+        mut self,
         shader: Option<&GraphicsShader>,
         topology: Option<ShaderTopology>,
         cull_mode: Option<ShaderCullMode>,
         front_face: Option<ShaderFrontFace>,
         polygon_mode: Option<ShaderPollygonMode>,
         index_format: Option<IndexBufferSize>,
-    ) {
+    ) -> Self {
         match shader {
             Some(shader) => {
                 let shader_inner = shader.inner.borrow();
@@ -129,7 +126,7 @@ impl RenderpassRecorder {
                 let fragment_entry_point = fragment_entry_point.unwrap();
 
                 let attrib_inner = shader.attrib.borrow();
-                let shader_binding = GraphicsShaderBinding {
+                let shader_binding = IntermediateRenderPipeline {
                     shader: (vertex_shader, fragment_shader),
                     vertex_attribute: (attrib_inner.stride, attrib_inner.attributes.clone()),
                     shader_entry: (vertex_entry_point.clone(), fragment_entry_point.clone()),
@@ -142,54 +139,37 @@ impl RenderpassRecorder {
                 };
 
                 self.shader = Some(shader_binding);
-
-                #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-                {
-                    self.shader_reflection = Some(shader_inner.reflection.clone());
-                }
+                self.shader_reflection = Some(shader_inner.reflection.clone());
             }
             None => {
                 self.shader = None;
-
-                #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-                {
-                    self.shader_reflection = None;
-                }
+                self.shader_reflection = None;
             }
         }
-    }
 
-    #[inline]
-    pub fn set_blend(&mut self, blend: Option<&TextureBlend>) {
-        match blend {
-            Some(blend) => {
-                self.blend = Some(blend.clone().into());
-                self.color_write_mask = Some(blend.clone().into());
-            }
-            None => {
-                self.blend = None;
-                self.color_write_mask = None;
-            }
-        }
+        self
     }
 
     #[inline]
     pub fn set_attachment_sampler(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         sampler: Option<&TextureSampler>,
-    ) {
+    ) -> Self {
         match sampler {
             Some(sampler) => {
-                let inner = self.graphics.borrow();
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Sampler(sampler.make_wgpu(inner.get_device())),
-                };
+                let attachment = {
+                    let gpu_inner = self.gpu.borrow();
 
-                drop(inner);
+                    BindGroupAttachment {
+                        group,
+                        binding,
+                        attachment: BindGroupType::Sampler(
+                            sampler.make_wgpu(gpu_inner.get_device()),
+                        ),
+                    }
+                };
 
                 self.insert_or_replace_attachment(group, binding, attachment);
             }
@@ -197,20 +177,28 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_texture(&mut self, group: u32, binding: u32, texture: Option<&Texture>) {
+    pub fn set_attachment_texture(
+        mut self,
+        group: u32,
+        binding: u32,
+        texture: Option<&Texture>,
+    ) -> Self {
         match texture {
             Some(texture) => {
-                let inner = texture.inner.borrow();
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Texture(inner.wgpu_view.clone()),
+                let attachment = {
+                    BindGroupAttachment {
+                        group,
+                        binding,
+                        attachment: BindGroupType::Texture(
+                            texture.inner.borrow().wgpu_view.clone(),
+                        ),
+                    }
                 };
-
-                drop(inner);
 
                 self.insert_or_replace_attachment(group, binding, attachment);
             }
@@ -218,15 +206,17 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
     pub fn set_attachment_texture_storage(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         texture: Option<&Texture>,
-    ) {
+    ) -> Self {
         match texture {
             Some(texture) => {
                 let inner = texture.inner.borrow();
@@ -242,10 +232,17 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_uniform(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
+    pub fn set_attachment_uniform(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&Buffer>,
+    ) -> Self {
         match buffer {
             Some(buffer) => {
                 let inner = buffer.inner.borrow();
@@ -261,46 +258,56 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
     pub fn set_attachment_uniform_vec<T>(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         buffer: Option<Vec<T>>,
-    ) where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        match buffer {
-            Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
-
-                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Uniform(buffer),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    pub fn set_attachment_uniform_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
+    ) -> Self
     where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
         match buffer {
             Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
+                let attachment = {
+                    let mut inner = self.gpu.borrow_mut();
+
+                    let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
+                    BindGroupAttachment {
+                        group,
+                        binding,
+                        attachment: BindGroupType::Uniform(buffer),
+                    }
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+
+        self
+    }
+
+    #[inline]
+    pub fn set_attachment_uniform_raw<T>(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&[T]>,
+    ) -> Self
+    where
+        T: bytemuck::Pod + bytemuck::Zeroable,
+    {
+        match buffer {
+            Some(buffer) => {
+                let mut inner = self.gpu.borrow_mut();
 
                 let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
                 let attachment = BindGroupAttachment {
@@ -317,10 +324,17 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_storage(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
+    pub fn set_attachment_storage(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&Buffer>,
+    ) -> Self {
         match buffer {
             Some(buffer) => {
                 let inner = buffer.inner.borrow();
@@ -336,16 +350,23 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_storage_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
+    pub fn set_attachment_storage_raw<T>(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&[T]>,
+    ) -> Self
     where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
         match buffer {
             Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
+                let mut inner = self.gpu.borrow_mut();
 
                 let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
                 let attachment = BindGroupAttachment {
@@ -362,20 +383,23 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
     pub fn set_attachment_storage_vec<T>(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         buffer: Option<Vec<T>>,
-    ) where
+    ) -> Self
+    where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
         match buffer {
             Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
+                let mut inner = self.gpu.borrow_mut();
 
                 let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
                 let attachment = BindGroupAttachment {
@@ -392,6 +416,8 @@ impl RenderpassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
@@ -400,21 +426,31 @@ impl RenderpassRecorder {
             .retain(|a| a.group != group || a.binding != binding);
     }
 
-    #[inline]
     pub(crate) fn insert_or_replace_attachment(
         &mut self,
         group: u32,
         binding: u32,
         attachment: BindGroupAttachment,
     ) {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        {
-            use crate::{dbg_log, gpu::ShaderBindingType};
+        let index = self
+            .attachments
+            .iter()
+            .position(|a| a.group == group && a.binding == binding);
 
-            if self.shader.is_none() {
-                panic!("Shader is not set");
-            }
+        if let Some(index) = index {
+            self.attachments[index] = attachment;
+        } else {
+            self.attachments.push(attachment);
+        }
+    }
 
+    pub fn build(self) -> Result<RenderPipeline, RenderPipelineError> {
+        if self.shader.is_none() {
+            return Err(RenderPipelineError::ShaderNotSet);
+        }
+
+        let shader_binding = self.shader.unwrap();
+        for attachment in &self.attachments {
             let r#type = self
                 .shader_reflection
                 .as_ref()
@@ -429,19 +465,22 @@ impl RenderpassRecorder {
                     };
 
                     bindings.iter().find_map(|shaderbinding| {
-                        if shaderbinding.group == group && shaderbinding.binding == binding {
+                        if shaderbinding.group == attachment.group && shaderbinding.binding == attachment.binding {
                             Some(shaderbinding)
                         } else {
                             None
                         }
                     })
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Shader does not have binding group: {} binding: {}",
-                        group, binding
-                    );
                 });
+
+            if r#type.is_none() {
+                return Err(RenderPipelineError::AttachmentNotSet(
+                    attachment.group,
+                    attachment.binding,
+                ));
+            }
+
+            let r#type = r#type.unwrap();
 
             if !match r#type.ty {
                 ShaderBindingType::UniformBuffer(_) => {
@@ -463,140 +502,11 @@ impl RenderpassRecorder {
                     matches!(attachment.attachment, BindGroupType::Uniform(_))
                 }
             } {
-                panic!(
-                    "Attachment group: {} binding: {} type: {} not match with shader type: {}",
-                    group, binding, attachment.attachment, r#type.ty
-                );
+                return Err(RenderPipelineError::InvalidAttachmentType(
+                    attachment.group, attachment.binding, r#type.ty,
+                ));
             }
         }
-
-        let index = self
-            .attachments
-            .iter()
-            .position(|a| a.group == group && a.binding == binding);
-
-        if let Some(index) = index {
-            self.attachments[index] = attachment;
-        } else {
-            self.attachments.push(attachment);
-        }
-    }
-
-    #[inline]
-    pub fn set_gpu_buffer(&mut self, vertex: Option<&Buffer>, index: Option<&Buffer>) {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        {
-            if self.shader.is_none() {
-                panic!("Shader is not set");
-            }
-
-            let shader = self.shader.as_ref().unwrap();
-
-            let index_format = shader.index_format.clone();
-
-            match index_format {
-                Some(_) => {
-                    if index.is_none() {
-                        panic!(
-                            "Index buffer is required when shader has index format, setup with shader.set_index_format() or render_pass.set_shader_ex()"
-                        );
-                    }
-                }
-                None => {
-                    if index.is_some() {
-                        panic!(
-                            "Index buffer is set, but shader does not require it, setup with shader.set_index_format() or render_pass.set_shader_ex()"
-                        );
-                    }
-                }
-            }
-        }
-
-        self.vertex_buffer = None;
-        self.index_buffer = None;
-
-        if let Some(vertex) = vertex {
-            self.vertex_buffer = Some(vertex.inner.wait_borrow().buffer.clone());
-        }
-
-        if let Some(index) = index {
-            self.index_buffer = Some(index.inner.wait_borrow().buffer.clone());
-        }
-    }
-
-    #[inline]
-    pub fn set_gpu_buffer_raw<T, T2>(&mut self, vertex: Option<&[T]>, index: Option<&[T2]>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-        T2: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        {
-            if self.shader.is_none() {
-                panic!("Shader is not set");
-            }
-
-            let shader = self.shader.as_ref().unwrap();
-
-            let index_format = shader.index_format.clone();
-
-            match index_format {
-                Some(_) => {
-                    if index.is_none() {
-                        panic!(
-                            "Index buffer is required when shader has index format, setup with shader.set_index_format() or render_pass.set_shader_ex()"
-                        );
-                    }
-                }
-                None => {
-                    if index.is_some() {
-                        panic!(
-                            "Index buffer is set, but shader does not require it, setup with shader.set_index_format() or render_pass.set_shader_ex()"
-                        );
-                    }
-                }
-            }
-        }
-
-        let mut graphics_inner = self.graphics.borrow_mut();
-
-        self.vertex_buffer = None;
-        self.index_buffer = None;
-
-        if let Some(vertex) = vertex {
-            let vertex: &[u8] = bytemuck::cast_slice(vertex);
-
-            let buffer = graphics_inner.create_buffer_with(vertex, wgpu::BufferUsages::VERTEX);
-            self.vertex_buffer = Some(buffer);
-        }
-
-        if let Some(index) = index {
-            let index: &[u8] = bytemuck::cast_slice(index);
-
-            let buffer = graphics_inner.create_buffer_with(index, wgpu::BufferUsages::INDEX);
-            self.index_buffer = Some(buffer);
-        }
-    }
-
-    pub fn build(self, ranges: Range<u32>, num_of_instances: u32) -> BakedRenderpass {
-        let shader_binding = self.shader.as_ref().unwrap();
-
-        let attribute = &shader_binding.vertex_attribute;
-        let vertex_desc = VertexAttributeLayout {
-            stride: attribute.0 as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: attribute.1.clone(),
-        };
-
-        let primitive_state = wgpu::PrimitiveState {
-            topology: shader_binding.topology.into(),
-            strip_index_format: None,
-            front_face: shader_binding.front_face.into(),
-            cull_mode: shader_binding.cull_mode.map(|c| c.into()),
-            polygon_mode: shader_binding.polygon_mode.into(),
-            unclipped_depth: false,
-            conservative: false,
-        };
 
         let bind_group_hash_key = {
             let mut hasher = DefaultHasher::new();
@@ -622,7 +532,7 @@ impl RenderpassRecorder {
         };
 
         let bind_group_attachments = {
-            let mut gpu_inner = self.graphics.borrow_mut();
+            let mut gpu_inner = self.gpu.borrow_mut();
 
             match gpu_inner.get_bind_group(bind_group_hash_key) {
                 Some(bind_group) => bind_group,
@@ -630,7 +540,6 @@ impl RenderpassRecorder {
                     let mut bind_group_attachments: HashMap<u32, Vec<wgpu::BindGroupEntry>> =
                         self.attachments.iter().fold(HashMap::new(), |mut map, e| {
                             let (group, binding, attachment) = (e.group, e.binding, &e.attachment);
-
                             let entry = match attachment {
                                 BindGroupType::Uniform(buffer) => wgpu::BindGroupEntry {
                                     binding,
@@ -695,6 +604,23 @@ impl RenderpassRecorder {
             }
         };
 
+        let attribute = &shader_binding.vertex_attribute;
+        let vertex_desc = VertexAttributeLayout {
+            stride: attribute.0 as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: attribute.1.clone(),
+        };
+
+        let primitive_state = wgpu::PrimitiveState {
+            topology: shader_binding.topology.into(),
+            strip_index_format: None,
+            front_face: shader_binding.front_face.into(),
+            cull_mode: shader_binding.cull_mode.map(|c| c.into()),
+            polygon_mode: shader_binding.polygon_mode.into(),
+            unclipped_depth: false,
+            conservative: false,
+        };
+
         let layout = shader_binding
             .layout
             .iter()
@@ -704,7 +630,7 @@ impl RenderpassRecorder {
         let pipeline_desc = GraphicsPipelineDesc {
             shaders: shader_binding.shader.clone(),
             entry_point: shader_binding.shader_entry.clone(),
-            render_target: TextureFormat::Bgra8UnormSrgb,
+            render_target: wgpu::TextureFormat::Rgba8UnormSrgb,
             depth_stencil: None,
             blend_state: self.blend.clone(),
             write_mask: self.color_write_mask.clone(),
@@ -714,16 +640,18 @@ impl RenderpassRecorder {
             msaa_count: 1,
         };
 
-        BakedRenderpass {
+        Ok(RenderPipeline {
             bind_group: bind_group_attachments,
             pipeline_desc,
-            vertices: self.vertex_buffer.unwrap_or_else(|| {
-                panic!("Vertex buffer is not set, call set_gpu_buffer() or set_gpu_buffer_raw() before building the render pass")
-            }),
-            indices: self.index_buffer,
-            itype: shader_binding.index_format.map(|size| size.into()),
-            num_to_draw: ranges,
-            num_of_instances,
-        }
+            index_format: shader_binding.index_format,
+        })
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RenderPipelineError {
+    ShaderNotSet,
+    InvalidShaderType,
+    AttachmentNotSet(u32, u32),
+    InvalidAttachmentType(u32, u32, ShaderBindingType),
 }

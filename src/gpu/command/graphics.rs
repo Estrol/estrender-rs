@@ -9,7 +9,6 @@ use wgpu::{ColorWrites, CommandEncoder, ShaderStages};
 #[rustfmt::skip]
 use crate::{
     gpu::{
-        backed_command::BakedRenderpass,
         buffer::Buffer,
         inner::GPUInner,
         pipeline_manager::GraphicsPipelineDesc,
@@ -43,7 +42,7 @@ use crate::{
 use super::{BindGroupAttachment, drawing::DrawingContext};
 
 #[derive(Clone, Debug, Hash)]
-pub(crate) struct GraphicsShaderBinding {
+pub(crate) struct IntermediateRenderPipeline {
     pub shader: (wgpu::ShaderModule, wgpu::ShaderModule),
     pub vertex_attribute: (u64, Vec<wgpu::VertexAttribute>),
     pub shader_entry: (String, String),
@@ -56,8 +55,8 @@ pub(crate) struct GraphicsShaderBinding {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum ShaderBinding {
-    Intermediate(GraphicsShaderBinding),
+pub(crate) enum RenderShaderBinding {
+    Intermediate(IntermediateRenderPipeline),
     Pipeline(RenderPipeline),
 }
 
@@ -148,7 +147,7 @@ pub(crate) struct RenderPassInner {
     pub vertex: Option<wgpu::Buffer>,
     pub index: Option<wgpu::Buffer>,
 
-    pub shader: Option<ShaderBinding>,
+    pub shader: Option<RenderShaderBinding>,
     #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
     pub shader_reflection: Option<Vec<ShaderReflect>>,
 
@@ -338,10 +337,10 @@ impl RenderPass {
             let shader = inner.shader.as_ref().unwrap();
 
             let index_format = match shader {
-                ShaderBinding::Intermediate(GraphicsShaderBinding { index_format, .. }) => {
+                RenderShaderBinding::Intermediate(IntermediateRenderPipeline { index_format, .. }) => {
                     index_format
                 }
-                ShaderBinding::Pipeline(RenderPipeline { index_format, .. }) => index_format,
+                RenderShaderBinding::Pipeline(RenderPipeline { index_format, .. }) => index_format,
             };
 
             match index_format {
@@ -447,7 +446,7 @@ impl RenderPass {
                 let fragment_entry_point = fragment_entry_point.unwrap();
 
                 let attrib_inner = shader.attrib.borrow();
-                let shader_binding = GraphicsShaderBinding {
+                let shader_binding = IntermediateRenderPipeline {
                     shader: (vertex_shader, fragment_shader),
                     vertex_attribute: (attrib_inner.stride, attrib_inner.attributes.clone()),
                     shader_entry: (vertex_entry_point.clone(), fragment_entry_point.clone()),
@@ -459,7 +458,7 @@ impl RenderPass {
                     index_format: index_format.or_else(|| attrib_inner.index.clone()),
                 };
 
-                inner.shader = Some(ShaderBinding::Intermediate(shader_binding));
+                inner.shader = Some(RenderShaderBinding::Intermediate(shader_binding));
 
                 #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
                 {
@@ -482,7 +481,7 @@ impl RenderPass {
 
         match pipeline {
             Some(pipeline) => {
-                inner.shader = Some(ShaderBinding::Pipeline(pipeline.clone()));
+                inner.shader = Some(RenderShaderBinding::Pipeline(pipeline.clone()));
             }
             None => {
                 inner.shader = None;
@@ -497,7 +496,7 @@ impl RenderPass {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
             match &inner.shader {
-                Some(ShaderBinding::Pipeline(_)) => {
+                Some(RenderShaderBinding::Pipeline(_)) => {
                     panic!("Cannot insert or replace attachment when using a pipeline shader");
                 }
                 _ => {}
@@ -521,6 +520,13 @@ impl RenderPass {
         {
             if inner.shader.is_none() {
                 panic!("Shader is not set");
+            }
+
+            match &inner.shader {
+                Some(RenderShaderBinding::Pipeline(_)) => {
+                    panic!("Cannot insert or replace attachment when using a pipeline shader");
+                }
+                _ => {}
             }
 
             let r#type = inner
@@ -575,13 +581,6 @@ impl RenderPass {
                     "Attachment group: {} binding: {} type: {} not match with shader type: {}",
                     group, binding, attachment.attachment, r#type.ty
                 );
-            }
-
-            match &inner.shader {
-                Some(ShaderBinding::Pipeline(_)) => {
-                    panic!("Cannot insert or replace attachment when using a pipeline shader");
-                }
-                _ => {}
             }
         }
 
@@ -1023,7 +1022,7 @@ impl RenderPass {
         let inner = self.inner.borrow();
 
         match &inner.shader {
-            Some(ShaderBinding::Intermediate(shader_binding)) => {
+            Some(RenderShaderBinding::Intermediate(shader_binding)) => {
                 let bind_group_hash_key = {
                     let mut hasher = DefaultHasher::new();
                     hasher.write_u64(0u64); // Graphics shader hash id
@@ -1196,7 +1195,7 @@ impl RenderPass {
                     shader_binding.index_format,
                 )
             }
-            Some(ShaderBinding::Pipeline(pipeline)) => {
+            Some(RenderShaderBinding::Pipeline(pipeline)) => {
                 let mut pipeline_desc = pipeline.pipeline_desc.clone();
                 pipeline_desc.render_target = inner.render_target_format;
                 pipeline_desc.depth_stencil = inner.depth_target_format;
@@ -1236,54 +1235,6 @@ impl RenderPass {
     #[inline]
     pub fn begin_drawing(&mut self) -> Option<DrawingContext> {
         DrawingContext::new(self.clone())
-    }
-
-    #[inline]
-    pub fn draw_baked(&mut self, baked: &BakedRenderpass) {
-        let mut pipeline_desc = baked.pipeline_desc.clone();
-        let mut inner = self.inner.borrow_mut();
-
-        pipeline_desc.render_target = inner.render_target_format;
-        pipeline_desc.depth_stencil = inner.depth_target_format;
-        pipeline_desc.msaa_count = inner.multi_sample_count.unwrap_or(1);
-
-        let pipeline_hash_key = {
-            let mut hasher = DefaultHasher::new();
-            pipeline_desc.hash(&mut hasher);
-
-            hasher.finish()
-        };
-
-        let pipeline = {
-            let mut graphics_inner = self.graphics.borrow_mut();
-            match graphics_inner.get_graphics_pipeline(pipeline_hash_key) {
-                Some(pipeline) => pipeline,
-                None => graphics_inner.create_graphics_pipeline(pipeline_hash_key, pipeline_desc),
-            }
-        };
-
-        let bind_group = baked.bind_group.clone();
-        let vbo = baked.vertices.clone();
-        let ibo = baked.indices.clone();
-        let itype = baked.itype;
-
-        let queue = RenderPassQueue {
-            pipeline,
-            bind_group,
-            vbo: Some(vbo),
-            ibo,
-            itype,
-            viewport: inner.viewport.clone(),
-            scissor: inner.scissor.clone(),
-            ty: DrawCallType::Direct {
-                ranges: baked.num_to_draw.clone(),
-                vertex_offset: 0,
-                num_of_instances: baked.num_of_instances,
-            },
-            push_constant: inner.push_constant.clone(),
-        };
-
-        inner.queues.push(queue);
     }
 
     pub(crate) fn end(&mut self) {
@@ -1556,6 +1507,7 @@ impl AttachmentConfigurator for RenderPass {
         match buffer {
             Some(buffer) => {
                 let inner = buffer.inner.borrow();
+
                 let attachment = BindGroupAttachment {
                     group,
                     binding,

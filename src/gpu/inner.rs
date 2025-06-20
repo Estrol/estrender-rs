@@ -14,10 +14,15 @@ use super::{
 
 use super::Limits;
 
+lazy_static::lazy_static! {
+    pub static ref INSTANCE_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+}
+
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) struct GPUInner {
     pub is_invalid: bool,
+    pub instance_id: usize,
 
     pub instance: Option<wgpu::Instance>,
     pub window: Option<ArcMut<Handle>>,
@@ -295,8 +300,11 @@ impl GPUInner {
         let pipeline_manager = PipelineManager::new();
         let bind_group_manager = BindGroupManager::new();
 
+        let id = INSTANCE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Ok(Self {
             is_invalid: false,
+            instance_id: id,
 
             instance: Some(instance),
             window: None,
@@ -315,6 +323,18 @@ impl GPUInner {
             drawing_vertex_buffer: None,
             drawing_index_buffer: None,
         })
+    }
+
+    pub fn is_vsync(&self) -> bool {
+        if self.is_invalid {
+            panic!("Invalid GPU context");
+        }
+
+        if self.config.is_none() {
+            panic!("GPU config not initialized");
+        }
+
+        self.config.as_ref().unwrap().present_mode == wgpu::PresentMode::Fifo
     }
 
     pub fn get_swapchain(&self) -> Result<SurfaceTexture, SwapchainError> {

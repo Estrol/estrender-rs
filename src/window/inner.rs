@@ -200,13 +200,6 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
                     to_remove = Some(window_id);
                 }
                 event::WindowEvent::RedrawRequested => {
-                    if self
-                        .has_redraw_requested
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                    {
-                        return;
-                    }
-
                     self.has_redraw_requested
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                 }

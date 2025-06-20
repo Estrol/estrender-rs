@@ -10,7 +10,7 @@ fn main() {
         .build()
         .expect("Failed to create window");
 
-    let gpu = est_render::create_gpu(Some(&mut window))
+    let mut gpu = est_render::create_gpu(Some(&mut window))
         .build()
         .expect("Failed to create GPU");
 

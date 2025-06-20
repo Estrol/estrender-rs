@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use winit::keyboard::{Key, NamedKey, SmolStr};
+use winit::{keyboard::{Key, NamedKey, SmolStr}};
 
-use crate::{math::Vector2, utils::ArcRef};
+use crate::{math::Vector2, utils::ArcRef, window::{Event, MouseScrollDelta}};
 
 use super::{Window, runner::Runner};
 
@@ -11,95 +11,61 @@ pub struct KeyBinding<T: Eq> {
 }
 
 pub(crate) struct InputInner {
-    pub key_bindings: HashMap<Key, bool>,
-    pub just_key_bindings: HashMap<Key, bool>,
-    pub events: ArcRef<Vec<winit::event::WindowEvent>>,
-    pub keyboard_callbacks: Vec<KeyboardInputCallback>,
-
+    pub window_id: usize,
+    pub key_bindings: HashMap<SmolStr, bool>,
+    pub just_key_bindings: HashMap<SmolStr, bool>,
+    
+    pub mouse_buttons: HashMap<SmolStr, bool>,
     pub mouse_position: Vector2,
     pub mouse_wheel: Vector2,
-    pub mouse_buttons: HashMap<u8, bool>,
 }
 
 pub type KeyboardInputCallback = Box<dyn Fn(Key, bool) + Send + Sync>;
 
 impl InputInner {
-    pub fn process_event(&mut self) {
-        for event in self.events.wait_borrow().iter() {
+    pub fn process_event(&mut self, events: &[Event]) {
+        for event in events {
             match event {
-                winit::event::WindowEvent::KeyboardInput {
-                    device_id: _,
-                    event,
-                    is_synthetic,
-                } => {
-                    if *is_synthetic {
-                        return;
+                Event::KeyboardInput { key, pressed, window_id } => {
+                    if self.window_id != *window_id {
+                        continue;
                     }
-
-                    let key = event.logical_key.clone();
-
-                    let previous_state = *self.key_bindings.get(&key).unwrap_or(&false);
-                    let current_state = event.state == winit::event::ElementState::Pressed;
 
                     self.key_bindings
-                        .entry(key.clone())
-                        .and_modify(|state| *state = current_state)
-                        .or_insert(current_state);
-
-                    // Just keybinding set to false when keyup
-                    if !current_state {
-                        self.just_key_bindings.insert(key.clone(), false);
-                    }
-
-                    if previous_state != current_state {
-                        for callback in &self.keyboard_callbacks {
-                            callback(key.clone(), current_state);
-                        }
-                    }
-                }
-                winit::event::WindowEvent::MouseWheel {
-                    device_id: _,
-                    delta,
-                    phase: _,
-                } => match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
-                        self.mouse_wheel.x += *x;
-                        self.mouse_wheel.y += *y;
-                    }
-                    winit::event::MouseScrollDelta::PixelDelta(physical_position) => {
-                        self.mouse_wheel.x += physical_position.x as f32;
-                        self.mouse_wheel.y += physical_position.y as f32;
-                    }
+                        .insert(key.clone(), *pressed);
+                    self.just_key_bindings
+                        .insert(key.clone(), *pressed);
                 },
-                winit::event::WindowEvent::MouseInput {
-                    device_id: _,
-                    state,
-                    button,
-                } => {
-                    let button_code = match button {
-                        winit::event::MouseButton::Left => 0,
-                        winit::event::MouseButton::Right => 1,
-                        winit::event::MouseButton::Middle => 2,
-                        winit::event::MouseButton::Back => 3,
-                        winit::event::MouseButton::Forward => 4,
-                        winit::event::MouseButton::Other(code) => *code as u8,
-                    };
-
-                    println!(
-                        "Mouse button: {:?}, {}",
-                        button,
-                        *state == winit::event::ElementState::Pressed
-                    );
+                Event::MouseInput { button, pressed, window_id } => {
+                    if self.window_id != *window_id {
+                        continue;
+                    }
 
                     self.mouse_buttons
-                        .insert(button_code, *state == winit::event::ElementState::Pressed);
+                        .insert(button.clone(), *pressed);
                 }
-                winit::event::WindowEvent::CursorMoved {
-                    device_id: _,
-                    position,
-                } => {
-                    self.mouse_position.x = position.x as f32;
-                    self.mouse_position.y = position.y as f32;
+                Event::CursorMoved { pos, window_id } => {
+                    if self.window_id != *window_id {
+                        continue;
+                    }
+
+                    self.mouse_position = Vector2::new(pos.x as f32, pos.y as f32);
+                }
+                Event::MouseWheel { delta, window_id } => {
+                    if self.window_id != *window_id {
+                        continue;
+                    }
+
+                    match delta {
+                        MouseScrollDelta::LineDelta { delta_x, delta_y} => {
+                            self.mouse_wheel.x += *delta_x as f32;
+                            self.mouse_wheel.y += *delta_y as f32;
+                        }
+                        MouseScrollDelta::PixelDelta { delta_x, delta_y} => {
+                            self.mouse_wheel.x += *delta_x as f32;
+                            self.mouse_wheel.y += *delta_y as f32;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -113,127 +79,114 @@ pub struct Input {
 
 impl Input {
     pub fn new(runner: &mut Runner, window: &Window) -> Self {
-        let window_inner = window.inner.borrow();
-        let window_id = &window_inner
-            .window_pointer
-            .as_ref()
-            .unwrap()
-            .lock()
-            .get_window_id();
-
         let inner = InputInner {
+            window_id: window.inner.wait_borrow().window_id,
             key_bindings: HashMap::new(),
             just_key_bindings: HashMap::new(),
-            events: ArcRef::clone(&runner.app_runner.handles.get(window_id).unwrap().events),
-            keyboard_callbacks: Vec::new(),
-
-            mouse_position: Vector2::new(0.0, 0.0),
-            mouse_wheel: Vector2::new(0.0, 0.0),
             mouse_buttons: HashMap::new(),
+            mouse_position: Vector2::default(),
+            mouse_wheel: Vector2::default(),
         };
 
         let inner = ArcRef::new(inner);
-        runner.input_events.push(ArcRef::clone(&inner));
 
-        Input { inner }
-    }
-
-    pub fn is_key_pressed(&self, key: &str) -> bool {
-        let inner_ref = self.inner.borrow();
-        let key = str_mapping_key(key);
-
-        if let Some(pressed) = inner_ref.key_bindings.get(&key) {
-            *pressed
-        } else {
-            false
+        runner.input_events.push(inner.clone());
+        
+        Self {
+            inner,
         }
     }
 
-    pub fn is_key_released(&self, key: &str) -> bool {
-        let inner_ref = self.inner.borrow();
-        let key = str_mapping_key(key);
+    // pub fn is_key_pressed(&self, key: &str) -> bool {
+    //     let inner_ref = self.inner.borrow();
+    //     let key = str_mapping_key(key);
 
-        if let Some(pressed) = inner_ref.key_bindings.get(&key) {
-            !pressed
-        } else {
-            false
-        }
-    }
+    //     if let Some(pressed) = inner_ref.key_bindings.get(&key) {
+    //         *pressed
+    //     } else {
+    //         false
+    //     }
+    // }
 
-    pub fn is_key_just_pressed(&self, key: &str) -> bool {
-        let mut inner_ref = self.inner.borrow_mut();
-        let key = str_mapping_key(key);
+    // pub fn is_key_released(&self, key: &str) -> bool {
+    //     let inner_ref = self.inner.borrow();
+    //     let smol_str = SmolStr::from
+    // }
 
-        if let Some(pressed) = inner_ref.just_key_bindings.get_mut(&key) {
-            *pressed = true;
-            *pressed
-        } else {
-            false
-        }
-    }
+    // pub fn is_key_just_pressed(&self, key: &str) -> bool {
+    //     let mut inner_ref = self.inner.borrow_mut();
+    //     let key = str_mapping_key(key);
 
-    pub(crate) fn get_mouse_code(&self, button: &str) -> Option<u8> {
-        match button {
-            "Left" => Some(0),
-            "Right" => Some(1),
-            "Middle" => Some(2),
-            "Back" => Some(3),
-            "Forward" => Some(4),
-            _ => None,
-        }
-    }
+    //     if let Some(pressed) = inner_ref.just_key_bindings.get_mut(&key) {
+    //         *pressed = true;
+    //         *pressed
+    //     } else {
+    //         false
+    //     }
+    // }
 
-    pub fn is_mouse_button_pressed(&self, button: &str) -> bool {
-        let button_code = self.get_mouse_code(button);
-        if let None = button_code {
-            return false;
-        }
+    // pub(crate) fn get_mouse_code(&self, button: &str) -> Option<u8> {
+    //     match button {
+    //         "Left" => Some(0),
+    //         "Right" => Some(1),
+    //         "Middle" => Some(2),
+    //         "Back" => Some(3),
+    //         "Forward" => Some(4),
+    //         _ => None,
+    //     }
+    // }
 
-        let button_code = button_code.unwrap();
-        let inner_ref = self.inner.borrow();
+    // pub fn is_mouse_button_pressed(&self, button: &str) -> bool {
+    //     let button_code = self.get_mouse_code(button);
+    //     if let None = button_code {
+    //         return false;
+    //     }
 
-        if let Some(pressed) = inner_ref.mouse_buttons.get(&button_code) {
-            *pressed
-        } else {
-            false
-        }
-    }
+    //     let button_code = button_code.unwrap();
+    //     let inner_ref = self.inner.borrow();
 
-    pub fn is_mouse_button_released(&self, button: &str) -> bool {
-        let button_code = self.get_mouse_code(button);
-        if let None = button_code {
-            return false;
-        }
+    //     if let Some(pressed) = inner_ref.mouse_buttons.get(&button_code) {
+    //         *pressed
+    //     } else {
+    //         false
+    //     }
+    // }
 
-        let button_code = button_code.unwrap();
-        let inner_ref = self.inner.borrow();
+    // pub fn is_mouse_button_released(&self, button: &str) -> bool {
+    //     let button_code = self.get_mouse_code(button);
+    //     if let None = button_code {
+    //         return false;
+    //     }
 
-        if let Some(pressed) = inner_ref.mouse_buttons.get(&button_code) {
-            !pressed
-        } else {
-            false
-        }
-    }
+    //     let button_code = button_code.unwrap();
+    //     let inner_ref = self.inner.borrow();
 
-    pub fn get_mouse_position(&self) -> Vector2 {
-        let inner_ref = self.inner.borrow();
-        inner_ref.mouse_position
-    }
+    //     if let Some(pressed) = inner_ref.mouse_buttons.get(&button_code) {
+    //         !pressed
+    //     } else {
+    //         false
+    //     }
+    // }
 
-    pub fn get_mouse_wheel(&self) -> Vector2 {
-        let inner_ref = self.inner.borrow();
-        inner_ref.mouse_wheel
-    }
+    // pub fn get_mouse_position(&self) -> Vector2 {
+    //     let inner_ref = self.inner.borrow();
+    //     inner_ref.mouse_position
+    // }
 
-    pub fn connect_keyboard_callback<F>(&mut self, callback: F)
-    where
-        F: Fn(Key, bool) + Send + Sync + 'static,
-    {
-        self.inner
-            .borrow_mut()
-            .keyboard_callbacks
-            .push(Box::new(callback));
-    }
+    // pub fn get_mouse_wheel(&self) -> Vector2 {
+    //     let inner_ref = self.inner.borrow();
+    //     inner_ref.mouse_wheel
+    // }
+
+    // pub fn connect_keyboard_callback<F>(&mut self, callback: F)
+    // where
+    //     F: Fn(Key, bool) + Send + Sync + 'static,
+    // {
+    //     self.inner
+    //         .borrow_mut()
+    //         .keyboard_callbacks
+    //         .push(Box::new(callback));
+    // }
 }
 
 pub(crate) fn str_mapping_key(key: &str) -> Key {

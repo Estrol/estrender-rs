@@ -1,88 +1,143 @@
 use std::{
     collections::HashMap,
-    hash::{Hash, Hasher},
+    hash::{DefaultHasher, Hash, Hasher},
 };
 
-#[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-use crate::gpu::ShaderReflect;
 use crate::{
-    dbg_log,
     gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, ComputePipelineDesc,
-        ComputeShader, ComputeShaderBinding, GPUInner, Texture,
+        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, ComputePipelineDesc, ComputeShader, IntermediateComputeBinding, GPUInner, ShaderBindingType, ShaderReflect, Texture, TextureSampler
     },
     utils::ArcRef,
 };
 
-pub struct BakedComputePass {
+#[derive(Debug, Clone, Hash)]
+pub struct ComputePipeline {
     pub(crate) bind_group: Vec<(u32, wgpu::BindGroup)>,
-    pub(crate) pipeline: ComputePipelineDesc,
-    pub(crate) dispatch: (u32, u32, u32),
+    pub(crate) pipeline_desc: ComputePipelineDesc,
 }
 
-#[derive(Clone, Debug)]
-pub struct ComputepassRecorder {
-    pub(crate) graphics: ArcRef<GPUInner>,
-    pub(crate) shader: Option<ComputeShaderBinding>,
+#[derive(Debug, Clone)]
+pub struct ComputePipelineBuilder {
+    pub(crate) gpu: ArcRef<GPUInner>,
     pub(crate) attachments: Vec<BindGroupAttachment>,
-
-    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-    pub(crate) reflection: Option<ShaderReflect>,
+    pub(crate) shader: Option<IntermediateComputeBinding>,
+    pub(crate) shader_reflection: Option<ShaderReflect>,
 }
 
-impl ComputepassRecorder {
-    pub(crate) fn new(graphics: ArcRef<GPUInner>) -> Self {
+impl ComputePipelineBuilder {
+    pub(crate) fn new(gpu: ArcRef<GPUInner>) -> Self {
         Self {
-            graphics,
-            shader: None,
+            gpu,
             attachments: Vec::new(),
-
-            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-            reflection: None,
+            shader: None,
+            shader_reflection: None,
         }
     }
 
     #[inline]
-    pub fn set_shader(&mut self, shader: Option<&ComputeShader>) {
+    pub fn set_shader(
+        mut self,
+        shader: Option<&ComputeShader>,
+    ) -> Self {
         match shader {
             Some(shader) => {
                 let shader_inner = shader.inner.borrow();
-
-                let shader_entry_point = match &shader_inner.reflection {
-                    ShaderReflect::Compute { entry_point, .. } => entry_point.clone(),
-                    _ => panic!("Shader is not a compute shader"),
-                };
-
-                #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-                {
-                    if shader_entry_point.is_empty() {
-                        panic!("Compute shader entry point is empty");
-                    }
-                }
-
+                let shader_module = shader_inner.shader.clone();
                 let layout = shader_inner.bind_group_layouts.clone();
 
-                let shader_binding = ComputeShaderBinding {
-                    shader: shader_inner.shader.clone(),
+                let shader_reflect = shader_inner.reflection.clone();
+                let entry_point = match &shader_reflect {
+                    ShaderReflect::Compute { entry_point, .. } => {
+                        entry_point.clone()
+                    }
+                    _ => panic!("Shader must be a compute shader"),
+                };
+
+                let shader_binding = IntermediateComputeBinding {
+                    shader: shader_module,
+                    entry_point,
                     layout,
-                    entry_point: shader_entry_point,
                 };
 
                 self.shader = Some(shader_binding);
+                self.shader_reflection = Some(shader_reflect);
             }
             None => {
                 self.shader = None;
+                self.shader_reflection = None;
             }
         }
+
+        self
+    }
+
+    #[inline]
+    pub fn set_attachment_sampler(
+        mut self,
+        group: u32,
+        binding: u32,
+        sampler: Option<&TextureSampler>,
+    ) -> Self {
+        match sampler {
+            Some(sampler) => {
+                let attachment = {
+                    let gpu_inner = self.gpu.borrow();
+
+                    BindGroupAttachment {
+                        group,
+                        binding,
+                        attachment: BindGroupType::Sampler(
+                            sampler.make_wgpu(gpu_inner.get_device()),
+                        ),
+                    }
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+
+        self
+    }
+
+    #[inline]
+    pub fn set_attachment_texture(
+        mut self,
+        group: u32,
+        binding: u32,
+        texture: Option<&Texture>,
+    ) -> Self {
+        match texture {
+            Some(texture) => {
+                let attachment = {
+                    BindGroupAttachment {
+                        group,
+                        binding,
+                        attachment: BindGroupType::Texture(
+                            texture.inner.borrow().wgpu_view.clone(),
+                        ),
+                    }
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+
+        self
     }
 
     #[inline]
     pub fn set_attachment_texture_storage(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         texture: Option<&Texture>,
-    ) {
+    ) -> Self {
         match texture {
             Some(texture) => {
                 let inner = texture.inner.borrow();
@@ -98,10 +153,17 @@ impl ComputepassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_uniform(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
+    pub fn set_attachment_uniform(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&Buffer>,
+    ) -> Self {
         match buffer {
             Some(buffer) => {
                 let inner = buffer.inner.borrow();
@@ -117,46 +179,56 @@ impl ComputepassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
     pub fn set_attachment_uniform_vec<T>(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         buffer: Option<Vec<T>>,
-    ) where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        match buffer {
-            Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
-
-                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Uniform(buffer),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    pub fn set_attachment_uniform_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
+    ) -> Self
     where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
         match buffer {
             Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
+                let attachment = {
+                    let mut inner = self.gpu.borrow_mut();
+
+                    let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
+                    BindGroupAttachment {
+                        group,
+                        binding,
+                        attachment: BindGroupType::Uniform(buffer),
+                    }
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+
+        self
+    }
+
+    #[inline]
+    pub fn set_attachment_uniform_raw<T>(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&[T]>,
+    ) -> Self
+    where
+        T: bytemuck::Pod + bytemuck::Zeroable,
+    {
+        match buffer {
+            Some(buffer) => {
+                let mut inner = self.gpu.borrow_mut();
 
                 let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
                 let attachment = BindGroupAttachment {
@@ -173,10 +245,17 @@ impl ComputepassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_storage(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
+    pub fn set_attachment_storage(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&Buffer>,
+    ) -> Self {
         match buffer {
             Some(buffer) => {
                 let inner = buffer.inner.borrow();
@@ -192,16 +271,23 @@ impl ComputepassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
-    pub fn set_attachment_storage_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
+    pub fn set_attachment_storage_raw<T>(
+        mut self,
+        group: u32,
+        binding: u32,
+        buffer: Option<&[T]>,
+    ) -> Self
     where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
         match buffer {
             Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
+                let mut inner = self.gpu.borrow_mut();
 
                 let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
                 let attachment = BindGroupAttachment {
@@ -218,20 +304,23 @@ impl ComputepassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
     pub fn set_attachment_storage_vec<T>(
-        &mut self,
+        mut self,
         group: u32,
         binding: u32,
         buffer: Option<Vec<T>>,
-    ) where
+    ) -> Self
+    where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
         match buffer {
             Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
+                let mut inner = self.gpu.borrow_mut();
 
                 let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
                 let attachment = BindGroupAttachment {
@@ -248,6 +337,8 @@ impl ComputepassRecorder {
                 self.remove_attachment(group, binding);
             }
         }
+
+        self
     }
 
     #[inline]
@@ -256,44 +347,50 @@ impl ComputepassRecorder {
             .retain(|a| a.group != group || a.binding != binding);
     }
 
-    #[inline]
     pub(crate) fn insert_or_replace_attachment(
         &mut self,
         group: u32,
         binding: u32,
         attachment: BindGroupAttachment,
     ) {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        {
-            use crate::{
-                dbg_log,
-                gpu::{BindGroupType, ShaderBindingType},
+        let index = self
+            .attachments
+            .iter()
+            .position(|a| a.group == group && a.binding == binding);
+
+        if let Some(index) = index {
+            self.attachments[index] = attachment;
+        } else {
+            self.attachments.push(attachment);
+        }
+    }
+
+    pub fn build(self) -> Result<ComputePipeline, CompuitePipelineError> {
+        if self.shader.is_none() {
+            return Err(CompuitePipelineError::ShaderNotSet);
+        }
+
+        let shader_binding = self.shader.unwrap();
+        for attachment in &self.attachments {
+            let r#type = {
+                let shader_reflection = self.shader_reflection.as_ref().unwrap();
+
+                match shader_reflection {
+                    ShaderReflect::Compute { bindings, .. } => bindings
+                        .iter()
+                        .find(|b| b.group == attachment.group && b.binding == attachment.binding),
+                    _ => None,
+                }
             };
 
-            if self.shader.is_none() {
-                panic!("Shader is not set");
+            if r#type.is_none() {
+                return Err(CompuitePipelineError::AttachmentNotSet(
+                    attachment.group,
+                    attachment.binding,
+                ));
             }
 
-            let reflection = self.reflection.as_ref().unwrap();
-
-            let r#type = match reflection {
-                ShaderReflect::Compute { bindings, .. } => bindings
-                    .iter()
-                    .find_map(|shaderbinding| {
-                        if shaderbinding.group == group && shaderbinding.binding == binding {
-                            Some(shaderbinding)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Shader does not have binding group: {} binding: {}",
-                            group, binding
-                        );
-                    }),
-                _ => panic!("Shader is not a compute shader"),
-            };
+            let r#type = r#type.unwrap();
 
             if !match r#type.ty {
                 ShaderBindingType::UniformBuffer(_) => {
@@ -315,55 +412,29 @@ impl ComputepassRecorder {
                     matches!(attachment.attachment, BindGroupType::Uniform(_))
                 }
             } {
-                panic!(
-                    "Attachment group: {} binding: {} type: {} not match with shader type: {}",
-                    group, binding, attachment.attachment, r#type.ty
-                );
+                return Err(CompuitePipelineError::InvalidAttachmentType(
+                    attachment.group, attachment.binding, r#type.ty,
+                ));
             }
         }
 
-        let index = self
-            .attachments
-            .iter()
-            .position(|a| a.group == group && a.binding == binding);
-
-        if let Some(index) = index {
-            self.attachments[index] = attachment;
-        } else {
-            self.attachments.push(attachment);
-        }
-    }
-
-    pub fn build(self, x: u32, y: u32, z: u32) -> BakedComputePass {
-        let shader_binding = self
-            .shader
-            .as_ref()
-            .expect("Shader must be set before preparing pipeline");
-
         let bind_group_hash_key = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            hasher.write_u64(1u64); // Compute shader hash id.
+            let mut hasher = DefaultHasher::new();
+            hasher.write_u64(0u64); // Graphics shader hash id
 
             for attachment in &self.attachments {
                 attachment.group.hash(&mut hasher);
                 attachment.binding.hash(&mut hasher);
-
                 match &attachment.attachment {
-                    BindGroupType::Uniform(buffer) => {
-                        buffer.hash(&mut hasher);
-                    }
-                    BindGroupType::Storage(buffer) => {
-                        buffer.hash(&mut hasher);
-                    }
-                    BindGroupType::TextureStorage(texture) => {
-                        texture.hash(&mut hasher);
-                    }
-                    BindGroupType::Sampler(sampler) => {
-                        sampler.hash(&mut hasher);
+                    BindGroupType::Uniform(uniform) => {
+                        uniform.hash(&mut hasher);
                     }
                     BindGroupType::Texture(texture) => {
                         texture.hash(&mut hasher);
                     }
+                    BindGroupType::TextureStorage(texture) => texture.hash(&mut hasher),
+                    BindGroupType::Sampler(sampler) => sampler.hash(&mut hasher),
+                    BindGroupType::Storage(storage) => storage.hash(&mut hasher),
                 }
             }
 
@@ -371,7 +442,7 @@ impl ComputepassRecorder {
         };
 
         let bind_group_attachments = {
-            let mut gpu_inner = self.graphics.borrow_mut();
+            let mut gpu_inner = self.gpu.borrow_mut();
 
             match gpu_inner.get_bind_group(bind_group_hash_key) {
                 Some(bind_group) => bind_group,
@@ -379,11 +450,22 @@ impl ComputepassRecorder {
                     let mut bind_group_attachments: HashMap<u32, Vec<wgpu::BindGroupEntry>> =
                         self.attachments.iter().fold(HashMap::new(), |mut map, e| {
                             let (group, binding, attachment) = (e.group, e.binding, &e.attachment);
-
                             let entry = match attachment {
-                                BindGroupType::TextureStorage(texture) => wgpu::BindGroupEntry {
+                                BindGroupType::Uniform(buffer) => wgpu::BindGroupEntry {
+                                    binding,
+                                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                        buffer,
+                                        offset: 0,
+                                        size: None,
+                                    }),
+                                },
+                                BindGroupType::Texture(texture) => wgpu::BindGroupEntry {
                                     binding,
                                     resource: wgpu::BindingResource::TextureView(texture),
+                                },
+                                BindGroupType::Sampler(sampler) => wgpu::BindGroupEntry {
+                                    binding,
+                                    resource: wgpu::BindingResource::Sampler(sampler),
                                 },
                                 BindGroupType::Storage(buffer) => wgpu::BindGroupEntry {
                                     binding,
@@ -393,7 +475,10 @@ impl ComputepassRecorder {
                                         size: None,
                                     }),
                                 },
-                                _ => panic!("Unsupported bind group type"),
+                                BindGroupType::TextureStorage(texture) => wgpu::BindGroupEntry {
+                                    binding,
+                                    resource: wgpu::BindingResource::TextureView(texture),
+                                },
                             };
 
                             map.entry(group).or_insert_with(Vec::new).push(entry);
@@ -429,22 +514,31 @@ impl ComputepassRecorder {
             }
         };
 
-        let bind_group_layout = shader_binding
+        let layout = shader_binding
             .layout
             .iter()
             .map(|l| l.layout.clone())
             .collect::<Vec<_>>();
 
         let pipeline_desc = ComputePipelineDesc {
-            shader_module: shader_binding.shader.clone(),
-            entry_point: shader_binding.entry_point.clone(),
-            bind_group_layout,
+            shader_module: shader_binding.shader,
+            entry_point: shader_binding.entry_point,
+            bind_group_layout: layout,
         };
 
-        BakedComputePass {
+        let pipeline = ComputePipeline {
             bind_group: bind_group_attachments,
-            pipeline: pipeline_desc,
-            dispatch: (x, y, z),
-        }
+            pipeline_desc,
+        };
+
+        Ok(pipeline)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CompuitePipelineError {
+    ShaderNotSet,
+    InvalidShaderType,
+    AttachmentNotSet(u32, u32),
+    InvalidAttachmentType(u32, u32, ShaderBindingType),
 }

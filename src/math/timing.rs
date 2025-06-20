@@ -6,6 +6,7 @@ use std::{
 // Based on: https://stackoverflow.com/a/33554241
 // Totally obscure and not very well explained, but it works.
 // I'm not sure if it's the best way to do it, but it's the only way I found.
+#[derive(Debug, Clone)]
 pub struct Timing {
     fps: u32,
     fps_start_time: Instant,

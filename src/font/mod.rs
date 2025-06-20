@@ -40,6 +40,7 @@ pub struct FontInner {
     pub texture_height: u32,
     pub ascender: f32,
     pub descender: f32,
+    pub line_height: f32,
 }
 
 #[derive(Clone)]
@@ -83,6 +84,7 @@ impl Font {
 
         let ascender = line_metrics.ascent;
         let descender = line_metrics.descent;
+        let line_height = line_metrics.ascent - line_metrics.descent + line_metrics.line_gap;
 
         let mut total_area = 0;
         let mut max_glyph_width = 0;
@@ -181,6 +183,7 @@ impl Font {
             texture_height: atlas_height as u32,
             ascender,
             descender,
+            line_height,
         };
 
         let inner = ArcRef::new(inner);
@@ -208,7 +211,7 @@ impl Font {
             let codepoint = c as u32;
             if codepoint == '\n' as u32 {
                 pen.x = 0.0;
-                pen.y -= inner.texture_height as f32;
+                pen.y += inner.line_height as f32;
                 continue;
             }
 
@@ -234,10 +237,6 @@ impl Font {
 
         let width = (max_x - min_x).ceil().max(1.0) as usize;
         let height = (max_y - min_y).ceil().max(1.0) as usize;
-
-        println!("Inner.ascender: {}", inner.ascender);
-        println!("width: {}, height: {}", width, height);
-
         let mut buffer = vec![0; width * height];
 
         let mut pen = Vector2::new(0.0, 0.0);
@@ -246,7 +245,7 @@ impl Font {
             let codepoint = c as u32;
             if codepoint == '\n' as u32 {
                 pen.x = 0.0;
-                pen.y -= inner.texture_height as f32;
+                pen.y += inner.line_height as f32;
                 continue;
             }
 
@@ -399,6 +398,7 @@ impl Font {
 
         let ascender = reader.read_f32::<LittleEndian>()?;
         let descender = reader.read_f32::<LittleEndian>()?;
+        let line_height = reader.read_f32::<LittleEndian>()?;
 
         let inner = FontInner {
             info,
@@ -408,6 +408,7 @@ impl Font {
             texture_height: texture_buffer_height,
             ascender,
             descender,
+            line_height,
         };
 
         let inner = ArcRef::new(inner);
@@ -453,6 +454,7 @@ impl Font {
 
         writer2.write_f32::<LittleEndian>(inner.ascender)?;
         writer2.write_f32::<LittleEndian>(inner.descender)?;
+        writer2.write_f32::<LittleEndian>(inner.line_height)?;
 
         let uncompressed_data: Vec<u8> = writer2.into_inner();
         let uncompressed_size = uncompressed_data.len() as u32;
