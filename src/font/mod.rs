@@ -58,6 +58,11 @@ fn power_of_two(n: usize) -> usize {
     power
 }
 
+pub enum FontBakeFormat {
+    GrayScale,
+    Rgba,
+}
+
 impl Font {
     pub(crate) fn new(info: FontInfo, size: f32, glyph_range: &[(u32, u32)]) -> Self {
         let data = std::fs::read(&info.path).expect("Failed to read font file");
@@ -183,6 +188,112 @@ impl Font {
 
         Font {
             inner: ArcRef::clone(&font.inner),
+        }
+    }
+
+    pub fn bake_text(&self, text: &str, format: FontBakeFormat) -> Result<(Vec<u8>, u32, u32), String> {
+        let inner = self.inner.borrow();
+
+        let mut pen = Vector2::new(0.0, 0.0);
+
+        // Track bounding box
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+
+        // let mut max_bearing_y = f32::MIN;
+
+        for c in text.chars() {
+            let codepoint = c as u32;
+            if codepoint == '\n' as u32 {
+                pen.x = 0.0;
+                pen.y -= inner.texture_height as f32;
+                continue;
+            }
+
+            if let Some(glyph) = inner.glyphs.get(&codepoint) {
+                let x0 = pen.x + glyph.bearing_x;
+                let y0 = pen.y + inner.ascender - (glyph.height + glyph.bearing_y);
+                let x1 = x0 + glyph.width;
+                let y1 = y0 + glyph.height;
+
+                min_x = min_x.min(x0);
+                min_y = min_y.min(y0);
+                max_x = max_x.max(x1);
+                max_y = max_y.max(y1);
+
+                pen.x += glyph.advance_x;
+            }
+        }
+
+        // If no glyphs, return empty buffer
+        if min_x == f32::MAX || min_y == f32::MAX {
+            return Err("No glyphs found".to_string());
+        }
+
+        let width = (max_x - min_x).ceil().max(1.0) as usize;
+        let height = (max_y - min_y).ceil().max(1.0) as usize;
+
+        println!("Inner.ascender: {}", inner.ascender);
+        println!("width: {}, height: {}", width, height);
+
+        let mut buffer = vec![0; width * height];
+
+        let mut pen = Vector2::new(0.0, 0.0);
+
+        for c in text.chars() {
+            let codepoint = c as u32;
+            if codepoint == '\n' as u32 {
+                pen.x = 0.0;
+                pen.y -= inner.texture_height as f32;
+                continue;
+            }
+
+            if let Some(glyph) = inner.glyphs.get(&codepoint) {
+                let x0 = pen.x + glyph.bearing_x - min_x;
+                let y0 = pen.y + inner.ascender - (glyph.height + glyph.bearing_y) - min_y;
+
+                println!("Drawing glyph: {} at ({}, {})", codepoint, x0, y0);
+
+                let atlas_offset_x = glyph.atlas_start_offset.x as usize;
+                let atlas_offset_y = glyph.atlas_start_offset.y as usize;
+                let atlas_width = inner.texture_width as usize;
+                let atlas_height = inner.texture_height as usize;
+
+                for y in 0..glyph.height as usize {
+                    let src_start = (atlas_offset_y + y) * atlas_width + atlas_offset_x;
+                    let dest_start = (y0 as usize + y) * width + x0 as usize;
+
+                    for x in 0..glyph.width as usize {
+                        let src_index = src_start + x;
+                        let dest_index = dest_start + x;
+
+                        if src_index < atlas_width * atlas_height && dest_index < buffer.len() {
+                            buffer[dest_index] = inner.texture_buffer[src_index];
+                        }
+                    }
+                }
+
+                pen.x += glyph.advance_x;
+            }
+        }
+
+        match format {
+            FontBakeFormat::GrayScale => {
+                Ok((buffer, width as u32, height as u32))
+            }
+            FontBakeFormat::Rgba => {
+                let mut rgba_buffer = vec![0; width * height * 4];
+                for (i, pixel) in buffer.iter().enumerate() {
+                    rgba_buffer[i * 4] = *pixel; // R
+                    rgba_buffer[i * 4 + 1] = *pixel; // G
+                    rgba_buffer[i * 4 + 2] = *pixel; // B
+                    rgba_buffer[i * 4 + 3] = 255; // A
+                }
+
+                Ok((rgba_buffer, width as u32, height as u32))
+            }
         }
     }
 
@@ -368,96 +479,8 @@ impl Font {
         )
     }
 
-    pub fn create_gpu(&self, gpu: &GPU) -> Result<GPUFont, String> {
+    pub fn create_gpu(&self, gpu: &mut GPU) -> Result<GPUFont, String> {
         GPUFont::new(self, gpu)
-    }
-
-    pub fn bake_text(&self, text: &str) -> Result<(Vec<u8>, u32, u32), String> {
-        let inner = self.inner.borrow();
-
-        let mut pen = Vector2::new(0.0, 0.0);
-
-        // Track bounding box
-        let mut min_x = f32::MAX;
-        let mut min_y = f32::MAX;
-        let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
-
-        // let mut max_bearing_y = f32::MIN;
-
-        for c in text.chars() {
-            let codepoint = c as u32;
-            if codepoint == '\n' as u32 {
-                pen.x = 0.0;
-                pen.y -= inner.texture_height as f32;
-                continue;
-            }
-
-            if let Some(glyph) = inner.glyphs.get(&codepoint) {
-                let x0 = pen.x + glyph.bearing_x;
-                let y0 = pen.y + glyph.bearing_y + glyph.ascender;
-                let x1 = x0 + glyph.width;
-                let y1 = y0 + glyph.height + glyph.ascender;
-
-                min_x = min_x.min(x0);
-                min_y = min_y.min(y0);
-                max_x = max_x.max(x1);
-                max_y = max_y.max(y1);
-
-                pen.x += glyph.advance_x;
-            }
-        }
-
-        // If no glyphs, return empty buffer
-        if min_x == f32::MAX || min_y == f32::MAX {
-            return Err("No glyphs found".to_string());
-        }
-
-        let width = (max_x - min_x).ceil().max(1.0) as usize;
-        let height = (max_y - min_y).ceil().max(1.0) as usize;
-
-        let mut buffer = vec![0; width * height];
-
-        let mut pen = Vector2::new(0.0, 0.0);
-
-        for c in text.chars() {
-            let codepoint = c as u32;
-            if codepoint == '\n' as u32 {
-                pen.x = 0.0;
-                pen.y -= inner.texture_height as f32;
-                continue;
-            }
-
-            if let Some(glyph) = inner.glyphs.get(&codepoint) {
-                let x0 = pen.x + glyph.bearing_x;
-                let y0 = pen.y + glyph.bearing_y + glyph.ascender;
-                // let x1 = x0 + glyph.width;
-                // let y1 = y0 + glyph.height + glyph.ascender;
-
-                let atlas_offset_x = glyph.atlas_start_offset.x as usize;
-                let atlas_offset_y = glyph.atlas_start_offset.y as usize;
-                let atlas_width = inner.texture_width as usize;
-                let atlas_height = inner.texture_height as usize;
-
-                for y in 0..glyph.height as usize {
-                    let src_start = (atlas_offset_y + y) * atlas_width + atlas_offset_x;
-                    let dest_start = (y0 as usize + y) * width + x0 as usize;
-
-                    for x in 0..glyph.width as usize {
-                        let src_index = src_start + x;
-                        let dest_index = dest_start + x;
-
-                        if src_index < atlas_width * atlas_height && dest_index < buffer.len() {
-                            buffer[dest_index] = inner.texture_buffer[src_index];
-                        }
-                    }
-                }
-
-                pen.x += glyph.advance_x;
-            }
-        }
-
-        Ok((buffer, width as u32, height as u32))
     }
 }
 
