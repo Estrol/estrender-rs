@@ -13,9 +13,6 @@ x11 = []
 software = []
 enable-release-validation = []
 
-[lib]
-path = "src/lib.rs"
-
 [dependencies]
 bitflags = { version = "2.9.0" }
 bytemuck = { version = "1.22.0" }
