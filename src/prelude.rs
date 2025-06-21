@@ -8,3 +8,6 @@ pub use super::font::*;
 
 #[cfg(feature = "font")]
 pub use super::create_font_manager;
+
+#[cfg(feature = "software")]
+pub use super::create_pixel_buffer;
