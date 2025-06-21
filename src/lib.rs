@@ -14,7 +14,6 @@ pub mod utils;
 /// Window management and event handling abstractions
 pub mod window;
 
-
 use gpu::{GPU, GPUAdapter};
 use window::{Runner, Window};
 
@@ -62,21 +61,15 @@ pub fn create_gpu<'a>(window: Option<&'a mut Window>) -> GPUBuilder<'a> {
 
 /// Creates a new PixelBuffer instance. \
 /// This is not thread-safe and must be called from the same thread as the window.
-///
-/// # Example
-/// ```rs
-/// use engine::prelude::*;
-///
-/// let pixel_buffer = Engine::make_pixel_buffer()
-///   .with_window(&mut window)
-///   .build()?;
-///
-/// let pixels = vec![0u32; (800 * 600) as usize];
-/// pixel_buffer.write_buffers(&pixels, Vector2::new(800.0, 600.0))?;
-/// ```
 #[cfg(feature = "software")]
-pub fn create_pixel_buffer() -> PixelBufferBuilder<'static> {
-    PixelBufferBuilder::new()
+pub fn create_pixel_buffer<'a>(window: Option<&'a mut Window>) -> PixelBufferBuilder<'a> {
+    let builder = PixelBufferBuilder::new();
+
+    if let Some(window) = window {
+        builder.with_window(window)
+    } else {
+        builder
+    }
 }
 
 /// Queries the available GPU adapters.
@@ -85,18 +78,6 @@ pub fn create_pixel_buffer() -> PixelBufferBuilder<'static> {
 /// graphics APIs.
 ///
 /// This function can be called from any thread.
-///
-/// # Example
-/// ```rs
-/// use engine::prelude::*;
-///
-/// let adapters = Engine::query_gpu_adapter(None);
-/// if adapters.is_empty() {
-///    println!("No GPU adapters found");
-/// } else {
-///    println!("Found {} GPU adapters", adapters.len());
-/// }
-/// ```
 pub fn query_gpu_adapter(window: Option<&Window>) -> Vec<GPUAdapter> {
     let mut window_arc = None;
     if let Some(window) = window {
