@@ -15,10 +15,10 @@ use winit::{
 #[cfg(target_os = "windows")]
 use winit::platform::windows::EventLoopBuilderExtWindows;
 
-#[cfg(any(feature = "wayland", target_os = "linux"))]
+#[cfg(all(not(feature = "x11"), target_os = "linux"))]
 use winit::platform::wayland::EventLoopBuilderExtWayland;
 
-#[cfg(any(feature = "x11", target_os = "linux"))]
+#[cfg(all(feature = "x11", target_os = "linux"))]
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::{
@@ -256,8 +256,14 @@ impl Runner {
             current_loop.event_loop.clone()
         } else {
             let event_loop_result = std::panic::catch_unwind(|| {
-                EventLoop::<WindowEvent>::with_user_event()
-                    .with_any_thread(true)
+                let mut event_loop_builder = EventLoop::<WindowEvent>::with_user_event();
+                
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                {
+                    event_loop_builder.with_any_thread(true);
+                }
+
+                event_loop_builder
                     .build()
                     .expect("Failed to create EventLoop")
             });

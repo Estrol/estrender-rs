@@ -1,6 +1,7 @@
 //! Easy to use winit, softbuffer & wgpu abstractions
 
 /// Font rendering and text layout utilities
+#[cfg(feature = "font")]
 pub mod font;
 /// GPU graphics rendering abstractions
 pub mod gpu;
@@ -12,6 +13,8 @@ pub mod prelude;
 pub mod utils;
 /// Window management and event handling abstractions
 pub mod window;
+
+
 use gpu::{GPU, GPUAdapter};
 use window::{Runner, Window};
 
@@ -109,6 +112,14 @@ pub fn query_gpu_adapter(window: Option<&Window>) -> Vec<GPUAdapter> {
     }
 
     GPU::query_gpu(window_arc)
+}
+
+/// Creates a new font manager instance.
+/// 
+/// This is useful for loading and managing fonts for text rendering.
+#[cfg(feature = "font")]
+pub fn create_font_manager() -> crate::font::FontManager {
+    crate::font::FontManager::new()
 }
 
 pub struct GPUBuilder<'a> {

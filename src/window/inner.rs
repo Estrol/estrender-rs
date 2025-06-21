@@ -11,9 +11,11 @@ use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event,
     event_loop::ActiveEventLoop,
-    platform::windows::{CornerPreference, WindowAttributesExtWindows},
     window::{CustomCursor, CustomCursorSource, Window, WindowAttributes, WindowId},
 };
+
+#[cfg(target_os = "windows")]
+use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
 
 use crate::{
     dbg_log,
@@ -236,8 +238,14 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
                     .with_inner_size(size)
                     .with_resizable(false)
                     .with_max_inner_size(size)
-                    .with_min_inner_size(size)
-                    .with_corner_preference(CornerPreference::DoNotRound);
+                    .with_min_inner_size(size);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_attributes = window_attributes.with_corner_preference(
+                        CornerPreference::DoNotRound,
+                    );
+                }
 
                 if let Some(pos) = pos {
                     let pos: PhysicalPosition<i32> =
