@@ -54,8 +54,18 @@ pub struct GPUAdapter {
     pub vendor_id: u32,
 
     pub backend: String,
-    pub backend_enum: wgpu::Backend,
+    pub backend_enum: AdapterBackend,
     pub is_high_performance: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdapterBackend {
+    None,
+    Vulkan,
+    Metal,
+    Dx12,
+    Gl,
+    BrowserWebGpu,
 }
 
 impl GPU {
@@ -105,13 +115,22 @@ impl GPU {
 
                 let is_high_performance = matches!(info.device_type, wgpu::DeviceType::DiscreteGpu);
 
+                let backend = match info.backend {
+                    wgpu::Backend::Vulkan => AdapterBackend::Vulkan,
+                    wgpu::Backend::Metal => AdapterBackend::Metal,
+                    wgpu::Backend::Dx12 => AdapterBackend::Dx12,
+                    wgpu::Backend::Gl => AdapterBackend::Gl,
+                    wgpu::Backend::BrowserWebGpu => AdapterBackend::BrowserWebGpu,
+                    _ => AdapterBackend::None,
+                };
+
                 GPUAdapter {
                     name: info.name,
                     vendor: vendor_name.to_string(),
                     vendor_id: info.vendor,
 
                     backend: backend_string.to_string(),
-                    backend_enum: info.backend,
+                    backend_enum: backend,
                     is_high_performance,
                 }
             })

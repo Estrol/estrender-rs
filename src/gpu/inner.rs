@@ -4,7 +4,7 @@ use wgpu::{PipelineCache, Surface, SurfaceTexture};
 use winit::dpi::PhysicalSize;
 
 use crate::dbg_log;
-use crate::gpu::BindGroupCreateInfo;
+use crate::gpu::{AdapterBackend, BindGroupCreateInfo};
 use crate::{utils::ArcMut, window::Handle};
 
 use super::{
@@ -169,11 +169,21 @@ impl GPUInner {
                 let adapters = instance.enumerate_adapters(wgpu::Backends::PRIMARY);
                 let mut found = false;
 
+                let desired_backend = match gpu_adapter.backend_enum {
+                    AdapterBackend::Vulkan => wgpu::Backend::Vulkan,
+                    AdapterBackend::Metal => wgpu::Backend::Metal,
+                    AdapterBackend::Dx12 => wgpu::Backend::Dx12,
+                    AdapterBackend::Gl => wgpu::Backend::Gl,
+                    AdapterBackend::BrowserWebGpu => wgpu::Backend::BrowserWebGpu,
+                    AdapterBackend::None => wgpu::Backend::Noop,
+                };
+
                 let mut adapter = None;
                 for a in adapters {
-                    if a.get_info().name == gpu_adapter.name
+                    let backend = a.get_info().backend;
+                    if backend == desired_backend
+                        && a.get_info().name == gpu_adapter.name
                         && a.get_info().vendor == gpu_adapter.vendor_id
-                        && a.get_info().backend == gpu_adapter.backend_enum
                     {
                         adapter = Some(a);
                         found = true;
@@ -249,10 +259,15 @@ impl GPUInner {
             device_descriptor.required_limits = wgpu_limits;
         }
 
-        let optional_features = [
+        let mut optional_features = vec![
             wgpu::Features::DEPTH32FLOAT_STENCIL8,
             wgpu::Features::VERTEX_WRITABLE_STORAGE,
         ];
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            optional_features.push(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        }
 
         for feature in optional_features.iter() {
             if adapter.features().contains(*feature) {
