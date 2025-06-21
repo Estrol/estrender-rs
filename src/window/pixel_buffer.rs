@@ -75,7 +75,20 @@ impl PixelBuffer {
     pub(crate) fn new(window: &Window) -> Result<Self, String> {
         let window_inner = window.inner.wait_borrow_mut();
 
-        let context = SoftbufferContext::new(window_inner.window_pointer.clone().unwrap());
+        let window_handle = {
+            let handle = window_inner.window_pointer
+                .as_ref()
+                .ok_or("Window pointer is not set")?
+                .lock();
+
+            let window_handle = handle
+                .get_window();
+
+            window_handle.clone()
+        };
+
+        let context = SoftbufferContext::new(window_handle.clone());
+        
         if context.is_err() {
             return Err(format!(
                 "Failed to create softbuffer context: {:?}",
@@ -85,7 +98,8 @@ impl PixelBuffer {
 
         let context = context.unwrap();
         let surface =
-            SoftbufferSurface::new(&context, window_inner.window_pointer.clone().unwrap());
+            SoftbufferSurface::new(&context, window_handle);
+
         if surface.is_err() {
             return Err(format!(
                 "Failed to create softbuffer surface: {:?}",
@@ -230,7 +244,7 @@ impl<'a> PixelBufferDrawing<'a> {
                 let ca = Self::edge_function(c, a, p);
 
                 if ab >= 0.0 && bc >= 0.0 && ca >= 0.0 {
-                    self.set_pixel(p, &color.to_bytes());
+                    self.set_pixel(p, bytemuck::cast_slice(&[color]));
                 }
             }
         }
@@ -283,7 +297,7 @@ impl<'a> PixelBufferDrawing<'a> {
         let steps = dx.max(dy).ceil() as usize; // Use ceil to ensure at least one step
 
         if steps == 0 {
-            self.set_pixel(start, &color.to_bytes());
+            self.set_pixel(start, bytemuck::cast_slice(&[color]));
             return;
         }
 
@@ -292,7 +306,7 @@ impl<'a> PixelBufferDrawing<'a> {
             let x = start.x + (end.x - start.x) * t;
             let y = start.y + (end.y - start.y) * t;
             let pos = Vector2::new(x, y);
-            self.set_pixel(pos, &color.to_bytes());
+            self.set_pixel(pos, bytemuck::cast_slice(&[color]));
         }
     }
 

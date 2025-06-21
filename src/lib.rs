@@ -19,7 +19,7 @@ use gpu::{GPU, GPUAdapter};
 use window::{Runner, Window};
 
 #[cfg(feature = "software")]
-use window::pixel_buffer::PixelBuffer;
+use window::PixelBuffer;
 
 use crate::prelude::Limits;
 
