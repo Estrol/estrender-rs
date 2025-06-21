@@ -27,6 +27,23 @@ fn main() {
         if let Some(mut cmd) = gpu.begin_command() {
             if let Some(mut gp) = cmd.begin_renderpass() {
                 gp.set_clear_color(Color::BLUE); // Set the clear color to blue
+
+                if let Some(mut drawing) = gp.begin_drawing() {
+                    drawing
+                        .rectangle_filled(
+                            Vector2::new(100.0, 100.0),
+                            Vector2::new(200.0, 200.0),
+                            Color::RED,
+                        );
+
+                    drawing
+                        .circle_filled(
+                            Vector2::new(400.0, 300.0),
+                            50.0,
+                            25,
+                            Color::GREEN,
+                        );
+                }
             }
         }
     }
