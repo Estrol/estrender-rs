@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 use winit::{
     event,
     event_loop::{EventLoop, EventLoopProxy},
-    keyboard::{Key, NamedKey, NativeKey},
+    keyboard::{Key, NativeKey},
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
 };
 
@@ -22,14 +22,11 @@ use winit::platform::wayland::EventLoopBuilderExtWayland;
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::{
-    dbg_log,
     math::{Point2, Timing},
-    utils::{ArcMut, ArcRef},
-};
-
-use super::{
-    Handle, InnerAttribute, Window,
-    inner::{self, WindowEvent},
+    runner::{
+        named_key_to_str, runner_inner::Handle, Event, MouseScrollDelta, PollMode, WindowEvent
+    },
+    utils::{ArcMut, ArcRef}, window::{window_inner::WindowInner, WindowBuilder},
 };
 
 // This is the most laziest workaround to able construct multiple event loops
@@ -53,193 +50,21 @@ pub(crate) struct EventLoopWrapper {
 unsafe impl Sync for EventLoopWrapper {}
 unsafe impl Send for EventLoopWrapper {}
 
+/// Provide almost cross-platform event loop for the application.
+///
+/// This wrap winit's [EventLoop] and provides a way to create windows and handle events.
+/// But with some limitations:
+/// - No support for iOS and WASM platforms.
+/// - macOS platform have to use [PollMode::WaitDraw] or drawing at event [Event::RedrawRequested] because
+/// how winit setup the window drawing on macOS.
 #[allow(dead_code)]
 pub struct Runner {
-    pub(crate) app_runner: inner::WindowInner,
+    pub(crate) app_runner: super::runner_inner::RunnerInner,
     pub(crate) event_loop: ArcRef<EventLoop<WindowEvent>>,
     pub(crate) event_loop_proxy: EventLoopProxy<WindowEvent>,
-    pub(crate) window_events_attributes: Vec<ArcRef<InnerAttribute>>,
-    // pub(crate) input_events: Vec<ArcRef<InputInner>>,
+    pub(crate) window_events_attributes: Vec<ArcRef<WindowInner>>,
     pub(crate) rate_timing: Timing,
     pub(crate) pending_events: Vec<Event>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PollMode {
-    /// The event loop will poll for events and return immediately.
-    Poll,
-    /// The event loop will wait for events and return when an event is available.
-    Wait,
-    /// The event loop will wait for events and return when the window needs to be redrawn.
-    /// Unless calling the `request_redraw` method.
-    WaitDraw,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MouseScrollDelta {
-    LineDelta { delta_x: f32, delta_y: f32 },
-    PixelDelta { delta_x: f32, delta_y: f32 },
-}
-
-impl PartialEq for MouseScrollDelta {
-    fn eq(&self, other: &Self) -> bool {
-        // use near equality for floating point comparison
-
-        match (self, other) {
-            (
-                MouseScrollDelta::LineDelta { delta_x, delta_y },
-                MouseScrollDelta::LineDelta {
-                    delta_x: other_x,
-                    delta_y: other_y,
-                },
-            ) => {
-                (delta_x - other_x).abs() < f32::EPSILON && (delta_y - other_y).abs() < f32::EPSILON
-            }
-            (
-                MouseScrollDelta::PixelDelta { delta_x, delta_y },
-                MouseScrollDelta::PixelDelta {
-                    delta_x: other_x,
-                    delta_y: other_y,
-                },
-            ) => {
-                (delta_x - other_x).abs() < f32::EPSILON && (delta_y - other_y).abs() < f32::EPSILON
-            }
-            _ => false,
-        }
-    }
-}
-
-impl PartialOrd for MouseScrollDelta {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match (self, other) {
-            (
-                MouseScrollDelta::LineDelta { delta_x, delta_y },
-                MouseScrollDelta::LineDelta {
-                    delta_x: other_x,
-                    delta_y: other_y,
-                },
-            ) => Some(
-                delta_x
-                    .partial_cmp(other_x)?
-                    .then(delta_y.partial_cmp(other_y)?),
-            ),
-            (
-                MouseScrollDelta::PixelDelta { delta_x, delta_y },
-                MouseScrollDelta::PixelDelta {
-                    delta_x: other_x,
-                    delta_y: other_y,
-                },
-            ) => Some(
-                delta_x
-                    .partial_cmp(other_x)?
-                    .then(delta_y.partial_cmp(other_y)?),
-            ),
-            _ => None,
-        }
-    }
-}
-
-impl Ord for MouseScrollDelta {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            (
-                MouseScrollDelta::LineDelta { delta_x, delta_y },
-                MouseScrollDelta::LineDelta {
-                    delta_x: other_x,
-                    delta_y: other_y,
-                },
-            ) => delta_x
-                .partial_cmp(other_x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    delta_y
-                        .partial_cmp(other_y)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                ),
-            (
-                MouseScrollDelta::PixelDelta { delta_x, delta_y },
-                MouseScrollDelta::PixelDelta {
-                    delta_x: other_x,
-                    delta_y: other_y,
-                },
-            ) => delta_x
-                .partial_cmp(other_x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    delta_y
-                        .partial_cmp(other_y)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                ),
-            _ => std::cmp::Ordering::Equal,
-        }
-    }
-}
-
-impl Eq for MouseScrollDelta {}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DragAndDropEvent {
-    Dragleft,
-    DragEntered,
-    DragMoved,
-    DragDropped(Vec<String>), // List of file paths
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Event {
-    Closed {
-        window_id: usize,
-    },
-    Created {
-        ref_id: usize,
-        parent_ref_id: Option<usize>,
-        title: String,
-        size: Point2,
-        pos: Option<Point2>,
-    },
-    Focused {
-        window_id: usize,
-        focused: bool,
-    },
-    Resized {
-        window_id: usize,
-        size: Point2,
-    },
-    Moved {
-        window_id: usize,
-        pos: Point2,
-    },
-    CursorEntered {
-        window_id: usize,
-    },
-    CursorLeft {
-        window_id: usize,
-    },
-    CursorMoved {
-        window_id: usize,
-        pos: Point2, // Position in pixels
-    },
-    MouseWheel {
-        window_id: usize,
-        delta: MouseScrollDelta,
-    },
-    MouseInput {
-        window_id: usize,
-        button: SmolStr, // "Left", "Right", "Middle", "Back", "Forward"
-        pressed: bool,   // true if pressed, false if released
-    },
-    RedrawRequested {
-        window_id: usize,
-    },
-    KeyboardInput {
-        window_id: usize,
-        key: SmolStr,
-        pressed: bool, // true if pressed, false if released
-    },
-    DragAndDrop {
-        window_id: usize,
-        event: DragAndDropEvent,
-    },
 }
 
 impl Runner {
@@ -257,7 +82,7 @@ impl Runner {
         } else {
             let event_loop_result = std::panic::catch_unwind(|| {
                 let mut event_loop_builder = EventLoop::<WindowEvent>::with_user_event();
-                
+
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
                 {
                     event_loop_builder.with_any_thread(true);
@@ -291,58 +116,26 @@ impl Runner {
         };
 
         Ok(Self {
-            app_runner: inner::WindowInner::new(),
+            app_runner: super::runner_inner::RunnerInner::new(),
             event_loop,
             event_loop_proxy,
             window_events_attributes: Vec::new(),
-            // input_events: Vec::new(),
-            rate_timing: Timing::new(60),
+            rate_timing: Timing::new(0),
             pending_events: Vec::new(),
         })
     }
 
+    /// Returns the pending events that have been processed by the event loop in [Runner::pool_events].
     pub fn get_events(&self) -> &Vec<Event> {
         &self.pending_events
     }
 
-    /// Creates a new window with the given title, size, and position.
-    ///
-    /// **NOTE:** This function will make the thread caller the main thread,
-    /// it will panic if called from a different thread after the first call.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let mut runner = make_runner().unwrap();
-    /// let window = runner.make_window("My Window", Point::new(800, 600))
-    ///    .build()
-    ///    .unwrap();
-    /// ```
+    /// Creates a new [WindowBuilder] instance to build a new window.
     pub fn create_window(&mut self, title: &str, size: Point2) -> WindowBuilder {
         WindowBuilder::new(self, title, size)
     }
 
-    /// Creates a new Input instance. \
-    /// This is not thread-safe and must be called from the same thread as the window.
-    ///
-    /// # Example
-    /// ```rs
-    /// use engine::prelude::*;
-    ///
-    /// let input = Engine::make_input()
-    ///   .with_runner(&mut runner)
-    ///   .with_window(&mut window)
-    ///   .build()?;
-    ///
-    /// if input.is_key_pressed("A") {
-    ///    println!("Key A is pressed");
-    /// }
-    /// ```
-    // pub fn make_input(&mut self, window: &Window) -> Input {
-    //     Input::new(self, window)
-    // }
-
+    /// This called from [WindowBuilder] to create a new window.
     pub(crate) fn internal_new_window(
         &mut self,
         parent: Option<usize>,
@@ -395,6 +188,21 @@ impl Runner {
         Ok((window_id, event_loop_proxy))
     }
 
+    /// Pump the event loop and process events.
+    ///
+    /// This method will block based on the provided `mode`.
+    /// - [PollMode::Poll] will return immediately if there are no events.
+    /// - [PollMode::Wait] will block until an event is available.
+    /// - [PollMode::WaitDraw] will block until a redraw is requested (Recommended for MacOS platform).
+    ///
+    /// You can also pass [None] to use the default behavior, which is equivalent to `PollMode::Poll`.
+    ///
+    /// After calling this method, you can access the processed events using the [Runner::get_events] method.
+    ///
+    /// # Incompatible platforms
+    /// - iOS: This method is not supported on iOS due to platform limitations.
+    /// - WASM: This method is not supported on WASM due to how the browser handles events, unless
+    /// you using the emscripten event loop.
     pub fn pool_events<T>(&mut self, mode: T) -> bool
     where
         T: Into<Option<PollMode>>,
@@ -427,18 +235,18 @@ impl Runner {
                             for event in window_events.iter() {
                                 match event {
                                     event::WindowEvent::CloseRequested => {
-                                        self.pending_events.push(Event::Closed {
+                                        self.pending_events.push(Event::WindowClosed {
                                             window_id: window.window_id,
                                         });
                                     }
                                     event::WindowEvent::Resized(size) => {
-                                        self.pending_events.push(Event::Resized {
+                                        self.pending_events.push(Event::WindowResized {
                                             window_id: window.window_id,
                                             size: Point2::new(size.width, size.height),
                                         });
                                     }
                                     event::WindowEvent::Moved(pos) => {
-                                        self.pending_events.push(Event::Moved {
+                                        self.pending_events.push(Event::WindowMoved {
                                             window_id: window.window_id,
                                             pos: Point2::new(pos.x, pos.y),
                                         });
@@ -564,7 +372,7 @@ impl Runner {
                                         });
                                     }
                                     event::WindowEvent::Focused(focused) => {
-                                        self.pending_events.push(Event::Focused {
+                                        self.pending_events.push(Event::WindowFocused {
                                             window_id: window.window_id,
                                             focused: *focused,
                                         });
@@ -574,16 +382,10 @@ impl Runner {
                             }
                         }
                     }
-
-                    // for input in self.input_events.iter() {
-                    //     if let Some(mut input) = input.try_borrow_mut() {
-                    //         input.process_event();
-                    //     }
-                    // }
                 }
                 PumpStatus::Exit(code) => {
                     // Exit the event loop
-                    dbg_log!("Event loop exited with code: {}", code);
+                    crate::dbg_log!("Event loop exited with code: {}", code);
 
                     return false;
                 }
@@ -613,20 +415,11 @@ impl Runner {
         true
     }
 
-    // #[allow(unused)]
-    // pub fn send_event(&self, window: Option<&super::Window>, event: Event) -> Result<(), String> {
-    //     let window_id = if window.is_some() {
-    //         let window = window.unwrap();
-    //         let window_inner = window.inner.borrow();
-
-    //         Some(window_inner.window_id.clone())
-    //     } else {
-    //         None
-    //     };
-
-    //     unimplemented!();
-    // }
-
+    /// Set the rate (frame rate) for the event loop.
+    ///
+    /// This only useful if you want to control the frame rate of the event loop.
+    /// Not effective if you use `PollMode::Wait` or `PollMode::WaitDraw`, or multi
+    /// window mode, or multiple threads.
     pub fn set_rate(&mut self, rate: Option<Duration>) {
         let rate = {
             if let Some(rate) = rate {
@@ -639,14 +432,29 @@ impl Runner {
         self.rate_timing.set_fps(rate as u32);
     }
 
+    /// Set the target frames per second (FPS) for the event loop.
+    ///
+    /// This only useful if you want to control the frame rate of the event loop.
+    /// Not effective if you use `PollMode::Wait` or `PollMode::WaitDraw`, or multi
+    /// window mode, or multiple threads.
     pub fn set_target_fps(&mut self, fps: u32) {
         self.rate_timing.set_fps(fps);
     }
 
+    /// Get the current frame rate (FPS) of the event loop.
+    ///
+    /// This only useful if you want to control the frame rate of the event loop.
+    /// Not effective if you use `PollMode::Wait` or `PollMode::WaitDraw`, or multi
+    /// window mode, or multiple threads.
     pub fn get_target_fps(&self) -> u32 {
         self.rate_timing.get_fps()
     }
 
+    /// Get the time taken for each frame in milliseconds.
+    ///
+    /// This only useful if you want to control the frame rate of the event loop.
+    /// Not effective if you use `PollMode::Wait` or `PollMode::WaitDraw`, or multi
+    /// window mode, or multiple threads.
     pub fn get_frame_time(&self) -> f64 {
         self.rate_timing.get_frame_time()
     }
@@ -660,109 +468,5 @@ impl Runner {
 
     pub(crate) fn get_window_pointer(&self, window_id: usize) -> Option<ArcMut<Handle>> {
         self.app_runner.get_window_handle_by_ref(window_id)
-    }
-}
-pub struct WindowBuilder<'a> {
-    runner: &'a mut Runner,
-    parent_window: Option<&'a Window>,
-    title: String,
-    size: Point2,
-    pos: Option<Point2>,
-}
-
-impl<'a> WindowBuilder<'a> {
-    pub(crate) fn new(runner: &'a mut Runner, title: &str, size: Point2) -> Self {
-        WindowBuilder {
-            runner,
-            parent_window: None,
-            title: title.to_string(),
-            size,
-            pos: None,
-        }
-    }
-
-    /// Sets the title of the window.
-    pub fn title(mut self, title: String) -> Self {
-        self.title = title;
-        self
-    }
-
-    /// Sets the size of the window.
-    pub fn size(mut self, size: Point2) -> Self {
-        self.size = size;
-        self
-    }
-
-    /// Sets the position of the window.
-    pub fn pos(mut self, pos: Option<Point2>) -> Self {
-        self.pos = pos;
-        self
-    }
-
-    /// Sets the parent window for this window. \
-    /// This is useful for creating child windows or popups.
-    /// The parent window must be created before this window.
-    pub fn with_parent_window(mut self, parent: &'a Window) -> Self {
-        self.parent_window = Some(parent);
-        self
-    }
-
-    pub fn build(self) -> Result<Window, String> {
-        Window::new(
-            self.runner,
-            self.parent_window,
-            self.title,
-            self.size,
-            self.pos,
-        )
-    }
-}
-
-pub(crate) fn named_key_to_str(key: &NamedKey) -> Option<SmolStr> {
-    match key {
-        NamedKey::Alt => Some(SmolStr::new("Alt")),
-        NamedKey::AltGraph => Some(SmolStr::new("AltGraph")),
-        NamedKey::CapsLock => Some(SmolStr::new("CapsLock")),
-        NamedKey::Control => Some(SmolStr::new("Control")),
-        NamedKey::Fn => Some(SmolStr::new("Fn")),
-        NamedKey::FnLock => Some(SmolStr::new("FnLock")),
-        NamedKey::NumLock => Some(SmolStr::new("NumLock")),
-        NamedKey::ScrollLock => Some(SmolStr::new("ScrollLock")),
-        NamedKey::Shift => Some(SmolStr::new("Shift")),
-        NamedKey::Symbol => Some(SmolStr::new("Symbol")),
-        NamedKey::SymbolLock => Some(SmolStr::new("SymbolLock")),
-        NamedKey::Meta => Some(SmolStr::new("Meta")),
-        NamedKey::Hyper => Some(SmolStr::new("Hyper")),
-        NamedKey::Super => Some(SmolStr::new("Super")),
-        NamedKey::Enter => Some(SmolStr::new("Enter")),
-        NamedKey::Tab => Some(SmolStr::new("Tab")),
-        NamedKey::Space => Some(SmolStr::new("Space")),
-        NamedKey::ArrowDown => Some(SmolStr::new("ArrowDown")),
-        NamedKey::ArrowLeft => Some(SmolStr::new("ArrowLeft")),
-        NamedKey::ArrowRight => Some(SmolStr::new("ArrowRight")),
-        NamedKey::ArrowUp => Some(SmolStr::new("ArrowUp")),
-        NamedKey::End => Some(SmolStr::new("End")),
-        NamedKey::Home => Some(SmolStr::new("Home")),
-        NamedKey::PageDown => Some(SmolStr::new("PageDown")),
-        NamedKey::PageUp => Some(SmolStr::new("PageUp")),
-        NamedKey::Backspace => Some(SmolStr::new("Backspace")),
-        NamedKey::Clear => Some(SmolStr::new("Clear")),
-        NamedKey::Delete => Some(SmolStr::new("Delete")),
-        NamedKey::Insert => Some(SmolStr::new("Insert")),
-        NamedKey::Escape => Some(SmolStr::new("Escape")),
-        NamedKey::Pause => Some(SmolStr::new("Pause")),
-        NamedKey::F1 => Some(SmolStr::new("F1")),
-        NamedKey::F2 => Some(SmolStr::new("F2")),
-        NamedKey::F3 => Some(SmolStr::new("F3")),
-        NamedKey::F4 => Some(SmolStr::new("F4")),
-        NamedKey::F5 => Some(SmolStr::new("F5")),
-        NamedKey::F6 => Some(SmolStr::new("F6")),
-        NamedKey::F7 => Some(SmolStr::new("F7")),
-        NamedKey::F8 => Some(SmolStr::new("F8")),
-        NamedKey::F9 => Some(SmolStr::new("F9")),
-        NamedKey::F10 => Some(SmolStr::new("F10")),
-        NamedKey::F11 => Some(SmolStr::new("F11")),
-        NamedKey::F12 => Some(SmolStr::new("F12")),
-        _ => None,
     }
 }

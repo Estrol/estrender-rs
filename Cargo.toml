@@ -36,3 +36,6 @@ winit = "0.30.9"
 
 [package.metadata.docs.rs]
 all-features = true
+
+[dev-dependencies]
+imgui = "0.12.0"

@@ -2,15 +2,16 @@
 
 use std::cell::RefMut;
 
-use crate::{dbg_log, utils::ArcRef};
+use crate::{gpu::gpu_inner::GPUInner, utils::ArcRef};
 
-use super::{command::CommandBuffer, inner::GPUInner};
+use super::command::CommandBuffer;
 
+/// Represents the usage flags for a GPU buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BufferUsages(u32);
+pub struct BufferUsage(u32);
 
 bitflags::bitflags! {
-    impl BufferUsages: u32 {
+    impl BufferUsage: u32 {
         const MAP_READ = 0x0001;
         const MAP_WRITE = 0x0002;
         const COPY_SRC = 0x0004;
@@ -24,7 +25,7 @@ bitflags::bitflags! {
     }
 }
 
-impl Into<wgpu::BufferUsages> for BufferUsages {
+impl Into<wgpu::BufferUsages> for BufferUsage {
     fn into(self) -> wgpu::BufferUsages {
         wgpu::BufferUsages::from_bits(self.bits()).unwrap()
     }
@@ -39,7 +40,7 @@ pub struct BufferBuilder<T: bytemuck::Pod + bytemuck::Zeroable> {
     graphics: ArcRef<GPUInner>,
     data: BufferData<T>,
     len: usize,
-    usage: BufferUsages,
+    usage: BufferUsage,
     mapped: bool,
 }
 
@@ -48,34 +49,44 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> BufferBuilder<T> {
         BufferBuilder {
             graphics,
             data: BufferData::None,
-            usage: BufferUsages::empty(),
+            usage: BufferUsage::empty(),
             len: 0,
             mapped: false,
         }
     }
 
-    pub fn set_len(mut self, len: usize) -> Self {
+    /// Set empty data for the buffer.
+    pub fn set_data_empty(mut self, len: usize) -> Self {
         self.len = len;
         self
     }
 
+    /// Set data for the buffer from a vector.
     pub fn set_data_vec(mut self, data: Vec<T>) -> Self {
         self.data = BufferData::Data(bytemuck::cast_slice(&data).to_vec());
         self.len = data.len() * std::mem::size_of::<T>();
         self
     }
 
+    /// Set data for the buffer from a slice.
     pub fn set_data_slice(mut self, data: &[T]) -> Self {
         self.data = BufferData::Data(bytemuck::cast_slice(data).to_vec());
         self.len = data.len() * std::mem::size_of::<T>();
         self
     }
 
-    pub fn set_usage(mut self, usage: BufferUsages) -> Self {
+    /// Set the buffer usage flags.
+    pub fn set_usage(mut self, usage: BufferUsage) -> Self {
         self.usage = usage;
         self
     }
 
+    /// Set mapped state for the buffer.
+    ///
+    /// This is useful when you want to map the buffer for writing the data directly to the GPU memory.
+    ///
+    /// You have to call [Buffer::unmap] to unmap the buffer after you are done using it.
+    /// Otherwise, the command will panic when you try to use the buffer on mapped state.
     pub fn set_mapped(mut self, mapped: bool) -> Self {
         self.mapped = mapped;
         self
@@ -100,29 +111,23 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> BufferBuilder<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IntermediateBuffer {
-    pub buffer: wgpu::Buffer,
-    pub write: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BufferInner {
     pub buffer: wgpu::Buffer,
-    pub intermediate_buffer: Option<IntermediateBuffer>,
 
     pub size: wgpu::BufferAddress,
-    pub usage: wgpu::BufferUsages,
+    pub usage: BufferUsage,
     pub mapped: bool,
 }
 
+/// Represents a GPU buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Buffer {
     pub(crate) graphics: ArcRef<GPUInner>,
     pub(crate) inner: ArcRef<BufferInner>,
 
-    pub size: u64,
-    pub usage: BufferUsages,
+    pub(crate) mapped_buffer: Vec<u8>, // Used for mapped buffers
+    pub(crate) mapped_type: BufferMapMode, // Used for mapped buffers
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,7 +143,7 @@ impl Buffer {
     pub(crate) fn new(
         graphics: ArcRef<GPUInner>,
         size: wgpu::BufferAddress,
-        usage: BufferUsages,
+        usage: BufferUsage,
         mapped: bool,
     ) -> Result<Self, BufferError> {
         if size == 0 {
@@ -154,24 +159,27 @@ impl Buffer {
 
         let inner = BufferInner {
             buffer,
-            intermediate_buffer: None,
             size,
-            usage: usage.clone().into(),
+            usage,
             mapped,
         };
 
         Ok(Buffer {
             graphics,
             inner: ArcRef::new(inner),
-            size: size as u64,
-            usage,
+            mapped_buffer: if mapped {
+                vec![0; size as usize]
+            } else {
+                vec![]
+            },
+            mapped_type: BufferMapMode::Write,
         })
     }
 
     pub(crate) fn from_slice<T: bytemuck::Pod>(
         graphics: ArcRef<GPUInner>,
         data: &[T],
-        usage: BufferUsages,
+        usage: BufferUsage,
         mapped: bool,
     ) -> Result<Self, BufferError> {
         if data.is_empty() {
@@ -188,18 +196,29 @@ impl Buffer {
 
         let inner = BufferInner {
             buffer,
-            intermediate_buffer: None,
             size,
-            usage: usage.clone().into(),
+            usage,
             mapped,
         };
 
         Ok(Buffer {
             graphics,
             inner: ArcRef::new(inner),
-            size: size as u64,
-            usage,
+            mapped_buffer: if mapped {
+                bytemuck::cast_slice(data).to_vec()
+            } else {
+                vec![]
+            },
+            mapped_type: BufferMapMode::Write,
         })
+    }
+
+    pub fn usage(&self) -> BufferUsage {
+        self.inner.wait_borrow().usage
+    }
+
+    pub fn size(&self) -> u64 {
+        self.inner.wait_borrow().size
     }
 
     /// Resizes the buffer to the specified size.
@@ -231,11 +250,11 @@ impl Buffer {
                     old_data.truncate(size as usize);
                 }
 
-                graphics_ref.create_buffer_with(&old_data, self.usage.clone().into())
+                graphics_ref.create_buffer_with(&old_data, inner.usage.clone().into())
             } else {
                 graphics_ref.create_buffer(
                     size as wgpu::BufferAddress,
-                    self.usage.clone().into(),
+                    inner.usage.clone().into(),
                     false,
                 )
             }
@@ -244,11 +263,10 @@ impl Buffer {
         inner.buffer = new_buffer;
         inner.size = size as wgpu::BufferAddress;
 
-        self.size = size;
-
         Ok(())
     }
 
+    /// Writes the contents of the source buffer to this buffer.
     pub fn write(&self, src: &Buffer) {
         let graphics_ref = self.graphics.borrow();
         let mut encoder =
@@ -266,13 +284,24 @@ impl Buffer {
         _ = graphics_ref.get_device().poll(wgpu::PollType::Wait);
     }
 
+    /// Writes the contents of the source buffer to this buffer using a command buffer.
+    ///
+    /// This function is useful for when you want to write to the buffer in a command buffer context, such as during a render pass.
+    ///
+    /// [CommandBuffer::write_buffer] is a more convenient way to write a buffer in a command buffer context.
     pub fn write_cmd(&self, src: &Buffer, encoder: &mut CommandBuffer) {
-        if !self.usage.contains(BufferUsages::COPY_DST) {
-            panic!("Buffer is not writable");
-        }
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        {
+            let inner = self.inner.wait_borrow();
+            let src_inner = src.inner.wait_borrow();
 
-        if encoder.command.is_none() {
-            panic!("Command buffer is not writable");
+            if !src_inner.usage.contains(BufferUsage::COPY_SRC) {
+                panic!("Source buffer is not readable");
+            }
+
+            if inner.size < src_inner.size {
+                panic!("Destination buffer is too small");
+            }
         }
 
         self.internal_write_cmd(src, &mut encoder.command.as_mut().unwrap().borrow_mut());
@@ -286,15 +315,18 @@ impl Buffer {
     ) {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            if !self.usage.contains(BufferUsages::COPY_DST) {
+            let inner = self.inner.wait_borrow();
+            let src_inner = src.inner.wait_borrow();
+
+            if !inner.usage.contains(BufferUsage::COPY_DST) {
                 panic!("Buffer is not writable");
             }
 
-            if !src.usage.contains(BufferUsages::COPY_SRC) {
+            if !src_inner.usage.contains(BufferUsage::COPY_SRC) {
                 panic!("Source buffer is not readable");
             }
 
-            if self.size < src.size {
+            if inner.size < src_inner.size {
                 panic!("Destination buffer is too small");
             }
         }
@@ -302,22 +334,25 @@ impl Buffer {
         let src_inner = src.inner.wait_borrow();
         let inner = self.inner.wait_borrow();
 
-        encoder.copy_buffer_to_buffer(&src_inner.buffer, 0, &inner.buffer, 0, self.size);
+        encoder.copy_buffer_to_buffer(&src_inner.buffer, 0, &inner.buffer, 0, inner.size);
     }
 
     #[inline(always)]
     pub(crate) fn internal_write_cmd(&self, src: &Buffer, encoder: &mut wgpu::CommandEncoder) {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            if !self.usage.contains(BufferUsages::COPY_DST) {
+            let inner = self.inner.wait_borrow();
+            let src_inner = src.inner.wait_borrow();
+
+            if !inner.usage.contains(BufferUsage::COPY_DST) {
                 panic!("Buffer is not writable");
             }
 
-            if !src.usage.contains(BufferUsages::COPY_SRC) {
+            if !src_inner.usage.contains(BufferUsage::COPY_SRC) {
                 panic!("Source buffer is not readable");
             }
 
-            if self.size < src.size {
+            if inner.size < src_inner.size {
                 panic!("Destination buffer is too small");
             }
         }
@@ -325,12 +360,26 @@ impl Buffer {
         let src_inner = src.inner.wait_borrow();
         let inner = self.inner.wait_borrow();
 
-        encoder.copy_buffer_to_buffer(&src_inner.buffer, 0, &inner.buffer, 0, self.size);
+        encoder.copy_buffer_to_buffer(&src_inner.buffer, 0, &inner.buffer, 0, inner.size);
     }
 
+    /// Writes raw data to the buffer.
+    ///
+    /// By default, this will create an intermediate buffer to copy the data into, and then write that buffer to the destination buffer.
+    /// This function also will automatically pad the data to the required alignment if necessary.
+    ///
+    /// Will panic if the buffer is not writable or if the data is larger than the buffer size.
     pub fn write_raw<T: bytemuck::Pod + bytemuck::Zeroable>(&self, data: &[T]) {
-        if !self.usage.contains(BufferUsages::COPY_DST) {
-            panic!("Buffer is not writable");
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        {
+            let inner = self.inner.wait_borrow();
+            if !inner.usage.contains(BufferUsage::COPY_DST) {
+                panic!("Buffer is not writable");
+            }
+
+            if inner.size < data.len() as u64 * std::mem::size_of::<T>() as u64 {
+                panic!("Destination buffer is too small");
+            }
         }
 
         let graphics_ref = self.graphics.borrow();
@@ -351,6 +400,14 @@ impl Buffer {
         _ = graphics_ref.get_device().poll(wgpu::PollType::Wait);
     }
 
+    /// Writes raw data to the buffer using a command buffer, useful for writing data during a render pass.
+    ///
+    /// This function is useful for when you want to write to the buffer in a command buffer context, such as during a render pass.
+    /// This function also will automatically pad the data to the required alignment if necessary.
+    ///
+    /// [CommandBuffer::write_buffer_raw] is a more convenient way to write raw data to a buffer in a command buffer context.
+    ///
+    /// Will panic if the buffer is not writable or if the data is larger than the buffer size.
     pub fn write_raw_cmd<T: bytemuck::Pod + bytemuck::Zeroable>(
         &self,
         data: &[T],
@@ -358,12 +415,14 @@ impl Buffer {
     ) {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            if self.size < data.len() as u64 * std::mem::size_of::<T>() as u64 {
-                panic!("Destination buffer is too small");
+            let inner = self.inner.wait_borrow();
+
+            if !inner.usage.contains(BufferUsage::COPY_DST) {
+                panic!("Buffer is not writable");
             }
 
-            if !self.usage.contains(BufferUsages::COPY_DST) {
-                panic!("Buffer is not writable");
+            if inner.size < data.len() as u64 * std::mem::size_of::<T>() as u64 {
+                panic!("Destination buffer is too small");
             }
 
             if encoder.command.is_none() {
@@ -388,11 +447,11 @@ impl Buffer {
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            if !self.usage.contains(BufferUsages::COPY_DST) {
+            if !inner.usage.contains(BufferUsage::COPY_DST) {
                 panic!("Buffer is not writable");
             }
 
-            if self.size < data_len {
+            if inner.size < data_len {
                 panic!("Destination buffer is too small");
             }
         }
@@ -437,11 +496,11 @@ impl Buffer {
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            if !self.usage.contains(BufferUsages::COPY_DST) {
+            if !inner.usage.contains(BufferUsage::COPY_DST) {
                 panic!("Buffer is not writable");
             }
 
-            if self.size < data_len {
+            if inner.size < data_len {
                 panic!("Destination buffer is too small");
             }
         }
@@ -462,24 +521,24 @@ impl Buffer {
     /// Unless if the buffer was created with [BufferUsages::COPY_SRC] or [BufferUsages::MAP_READ], this will create an
     /// intermediate buffer to copy the data into, and then read from that buffer.
     pub fn read<T: bytemuck::Pod + bytemuck::Zeroable>(&self) -> Result<Vec<T>, BufferError> {
-        if !self.usage.contains(BufferUsages::COPY_SRC)
-            && !self.usage.contains(BufferUsages::MAP_READ)
+        let mut graphics_ref = self.graphics.borrow_mut();
+        let inner = self.inner.wait_borrow();
+
+        if !inner.usage.contains(BufferUsage::COPY_SRC)
+            && !inner.usage.contains(BufferUsage::MAP_READ)
         {
             return Err(BufferError::BufferNotReadable);
         }
 
-        let mut graphics_ref = self.graphics.borrow_mut();
-        let inner = self.inner.wait_borrow();
-
         if inner.mapped {
-            let data = inner.buffer.slice(..self.size).get_mapped_range();
+            let data = inner.buffer.slice(..inner.size).get_mapped_range();
             let result = bytemuck::cast_slice(&data).to_vec();
             drop(data);
 
             Ok(result)
         } else {
             let buffer = graphics_ref.create_buffer(
-                self.size,
+                inner.size,
                 wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 false,
             );
@@ -496,7 +555,7 @@ impl Buffer {
                 0,
                 &buffer,
                 0,
-                self.size as wgpu::BufferAddress,
+                inner.size as wgpu::BufferAddress,
             );
 
             graphics_ref
@@ -505,68 +564,74 @@ impl Buffer {
 
             _ = graphics_ref.get_device().poll(wgpu::PollType::Wait);
 
-            let mapped_buffer = buffer.slice(..self.size).get_mapped_range();
+            let result = {
+                let mapped_buffer = buffer.slice(..inner.size).get_mapped_range();
+                let result = bytemuck::cast_slice(&mapped_buffer).to_vec();
 
-            let result = bytemuck::cast_slice(&mapped_buffer).to_vec();
-            drop(mapped_buffer);
+                result
+            };
 
             Ok(result)
         }
     }
 
-    pub fn map(&mut self, mode: BufferMapMode) -> Result<(), BufferError> {
+    pub fn map(&mut self, mode: BufferMapMode) -> Result<&mut Vec<u8>, BufferError> {
         let mut inner = self.inner.wait_borrow_mut();
-        if inner.mapped {
-            return Ok(());
-        }
 
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        {
-            if !inner.usage.contains(wgpu::BufferUsages::MAP_READ)
-                && !inner.usage.contains(wgpu::BufferUsages::MAP_WRITE)
-            {
-                panic!("Buffer is not mappable");
+        match mode {
+            BufferMapMode::Write => {
+                inner.mapped = true;
+
+                self.mapped_buffer = vec![0; inner.size as usize];
+
+                return Ok(&mut self.mapped_buffer);
             }
+            BufferMapMode::Read => {
+                inner.mapped = true;
 
-            if mode == BufferMapMode::Write && !inner.usage.contains(wgpu::BufferUsages::MAP_WRITE)
-            {
-                panic!("Buffer is not writable");
-            }
+                drop(inner);
 
-            if mode == BufferMapMode::Read && !inner.usage.contains(wgpu::BufferUsages::MAP_READ) {
-                panic!("Buffer is not readable");
+                let buffer = self.read::<u8>()?;
+                self.mapped_buffer = buffer;
+
+                return Ok(&mut self.mapped_buffer);
             }
         }
-
-        let graphics_ref = self.graphics.borrow();
-        let device = graphics_ref.get_device();
-        let buffer = &inner.buffer;
-
-        let result = futures::executor::block_on(Self::map_buffer(
-            device,
-            buffer,
-            match mode {
-                BufferMapMode::Read => wgpu::MapMode::Read,
-                BufferMapMode::Write => wgpu::MapMode::Write,
-            },
-        ));
-
-        if !result {
-            dbg_log!("Failed to map buffer");
-            return Err(BufferError::FailedToMapBuffer);
-        }
-
-        inner.mapped = true;
-
-        dbg_log!("Buffer mapped successfully");
-        Ok(())
     }
 
     pub fn unmap(&mut self) {
-        let mut inner = self.inner.wait_borrow_mut();
-        if inner.mapped {
-            inner.buffer.unmap();
-            inner.mapped = false;
+        if self.mapped_buffer.is_empty() {
+            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+            {
+                panic!("Buffer is not mapped");
+            }
+
+            #[allow(unreachable_code)]
+            return;
+        }
+
+        let inner = self.inner.wait_borrow();
+        if !inner.mapped {
+            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+            {
+                panic!("Buffer is not mapped");
+            }
+
+            #[allow(unreachable_code)]
+            return;
+        }
+
+        match self.mapped_type {
+            BufferMapMode::Write => {
+                inner.buffer.unmap();
+
+                drop(inner);
+
+                self.write_raw(&self.mapped_buffer);
+            }
+            BufferMapMode::Read => {
+                self.mapped_buffer = vec![];
+            }
         }
     }
 
@@ -589,10 +654,7 @@ impl Buffer {
 
 impl std::hash::Hash for Buffer {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Don't hash during borrow
-        self.inner.wait_borrow().buffer.hash(state);
-        self.size.hash(state);
-        self.usage.hash(state);
+        self.inner.hash(state);
     }
 }
 

@@ -87,15 +87,12 @@ fn main() {
         .build()
         .expect("Failed to create blank texture");
 
-    let mut shader = gpu
+    let shader = gpu
         .create_graphics_shader()
         .set_vertex_code(VERTEX_DRAWING_SHADER)
         .set_fragment_code(FRAGMENT_DRAWING_SHADER)
         .build()
         .expect("Failed to create graphics shader");
-
-    shader.set_vertex_index_ty(None)
-        .expect("Failed to set vertex index type");
 
     let compute_shader = gpu
         .create_compute_shader()
@@ -142,14 +139,14 @@ fn main() {
     let vbo = gpu
         .create_buffer()
         .set_data_vec(vertices)
-        .set_usage(BufferUsages::VERTEX)
+        .set_usage(BufferUsage::VERTEX)
         .build()
         .expect("Failed to create vertex buffer");
 
     let ibo = gpu
         .create_buffer()
         .set_data_vec(indexes)
-        .set_usage(BufferUsages::INDEX)
+        .set_usage(BufferUsage::INDEX)
         .build()
         .expect("Failed to create index buffer");
 
@@ -165,7 +162,7 @@ fn main() {
                         window.quit();
                     }
                 }
-                Event::Resized { window_id: _, size } => {
+                Event::WindowResized { window_id: _, size } => {
                     if size.x <= 0 || size.y <= 0 {
                         continue; // Skip invalid sizes
                     }
@@ -187,7 +184,7 @@ fn main() {
                         if let Some(mut rp) = cmd.begin_renderpass() {
                             rp.set_clear_color(Color::BLACK);
                             rp.set_multi_sample_texture(Some(&msaa_texture));
-                            
+
                             rp.set_pipeline(Some(&pipeline));
                             rp.set_gpu_buffer(Some(&vbo), Some(&ibo));
                             rp.draw_indexed(0..3, 0, 1);

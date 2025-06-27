@@ -34,7 +34,7 @@ fn main() {
     while runner.pool_events(None) {
         for event in runner.get_events() {
             match event {
-                Event::Closed { .. } => {
+                Event::WindowClosed { .. } => {
                     return;
                 }
                 _ => {}

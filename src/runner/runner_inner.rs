@@ -18,56 +18,11 @@ use winit::{
 use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
 
 use crate::{
-    dbg_log,
-    math::{Point2, Position, Size},
+    runner::{CursorIcon, CustomCursorItem, WindowEvent},
     utils::{ArcMut, ArcRef},
 };
 
-use super::{CursorIcon, CustomCursorItem};
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub enum WindowEvent {
-    Create {
-        ref_id: usize,
-        parent_ref_id: Option<usize>,
-        title: String,
-        size: Point2,
-        pos: Option<Point2>,
-    },
-    Close {
-        ref_id: usize,
-    },
-    Title {
-        ref_id: usize,
-        title: String,
-    },
-    Cursor {
-        ref_id: usize,
-        cursor: Option<CursorIcon>,
-    },
-    Size {
-        ref_id: usize,
-        size: Size,
-    },
-    Position {
-        ref_id: usize,
-        pos: Position,
-    },
-    Visible {
-        ref_id: usize,
-        visible: bool,
-    },
-    Redraw {
-        ref_id: usize,
-    },
-}
-
-// #[derive(Clone, Debug, Hash)]
-// pub enum CursorSource {
-//     String(&'static str),
-//     Buffer(Vec<u8>),
-// }
+use crate::dbg_log;
 
 #[derive(Clone, Debug)]
 pub struct Handle {
@@ -137,14 +92,14 @@ impl Drop for WindowHandle {
     }
 }
 
-pub struct WindowInner {
+pub struct RunnerInner {
     pub handles: HashMap<WindowId, WindowHandle>,
     pub last_error: Option<String>,
     pub has_redraw_requested: AtomicBool,
     pub cursor_cache: HashMap<u64, CustomCursor>,
 }
 
-impl WindowInner {
+impl RunnerInner {
     pub fn new() -> Self {
         Self {
             handles: HashMap::new(),
@@ -172,7 +127,7 @@ impl WindowInner {
     }
 }
 
-impl ApplicationHandler<WindowEvent> for WindowInner {
+impl ApplicationHandler<WindowEvent> for RunnerInner {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn window_event(
@@ -242,9 +197,8 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
 
                 #[cfg(target_os = "windows")]
                 {
-                    window_attributes = window_attributes.with_corner_preference(
-                        CornerPreference::DoNotRound,
-                    );
+                    window_attributes =
+                        window_attributes.with_corner_preference(CornerPreference::DoNotRound);
                 }
 
                 if let Some(pos) = pos {
@@ -359,7 +313,8 @@ impl ApplicationHandler<WindowEvent> for WindowInner {
             }
             WindowEvent::Position { ref_id, pos } => {
                 if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
-                    let pos: PhysicalPosition<i32> = pos.into();
+                    let pos = PhysicalPosition::new(pos.x as i32, pos.y as i32);
+                    
                     let handle_ref = handle.lock();
                     let window = handle_ref.get_window();
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use wgpu::{BindingType, SamplerBindingType, naga::front::wgsl};
 
-use crate::{gpu::inner::GPUInner, utils::ArcRef};
+use crate::{gpu::gpu_inner::GPUInner, utils::ArcRef};
 
 use super::{BindGroupLayout, ShaderBindingType, ShaderReflect, StorageAccess, parse};
 

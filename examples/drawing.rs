@@ -17,7 +17,7 @@ fn main() {
     while runner.pool_events(None) {
         for event in runner.get_events() {
             match event {
-                Event::Closed { .. } => {
+                Event::WindowClosed { .. } => {
                     return;
                 }
                 _ => {}
@@ -29,20 +29,13 @@ fn main() {
                 gp.set_clear_color(Color::BLUE); // Set the clear color to blue
 
                 if let Some(mut drawing) = gp.begin_drawing() {
-                    drawing
-                        .rectangle_filled(
-                            Vector2::new(100.0, 100.0),
-                            Vector2::new(200.0, 200.0),
-                            Color::RED,
-                        );
+                    drawing.rectangle_filled(
+                        Vector2::new(100.0, 100.0),
+                        Vector2::new(200.0, 200.0),
+                        Color::RED,
+                    );
 
-                    drawing
-                        .circle_filled(
-                            Vector2::new(400.0, 300.0),
-                            50.0,
-                            25,
-                            Color::GREEN,
-                        );
+                    drawing.circle_filled(Vector2::new(400.0, 300.0), 50.0, 25, Color::GREEN);
                 }
             }
         }

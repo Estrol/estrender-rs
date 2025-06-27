@@ -6,12 +6,13 @@ use std::{
 
 use wgpu::{ColorWrites, CommandEncoder, ShaderStages};
 
+#[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+use crate::gpu::BufferUsage;
+use crate::gpu::{GraphicsPipelineDesc, gpu_inner::GPUInner};
 #[rustfmt::skip]
 use crate::{
     gpu::{
         buffer::Buffer,
-        inner::GPUInner,
-        pipeline_manager::GraphicsPipelineDesc,
         shader::{
             GraphicsShader,
             IndexBufferSize,
@@ -158,13 +159,13 @@ pub(crate) struct RenderPassInner {
 }
 
 /// Represents a render pass in the graphics pipeline.
-/// 
+///
 /// Renderpass support intermediate mode which includes setting up shaders, buffers, and attachments.
 /// or using a pre-defined render pipeline.
-/// 
+///
 /// It's generally recommended to use a render pipeline for better performance and validation upfront.
 /// But for more dynamic scenarios, you can use the intermediate mode to set up shaders and buffers on the fly.
-/// 
+///
 /// # Example Usage
 /// Intermediate mode
 /// ```rust
@@ -184,7 +185,7 @@ pub(crate) struct RenderPassInner {
 ///    .set_attachment_sampler(0, 1, &my_sampler)
 ///    .build()
 ///    .expect("Failed to create render pipeline");
-/// 
+///
 /// // Somewhere in your code
 /// let mut render_pass = ...
 /// render_pass.set_pipeline(Some(&pipeline));
@@ -337,27 +338,15 @@ impl RenderPass {
             let shader = inner.shader.as_ref().unwrap();
 
             let index_format = match shader {
-                RenderShaderBinding::Intermediate(IntermediateRenderPipeline { index_format, .. }) => {
-                    index_format
-                }
+                RenderShaderBinding::Intermediate(IntermediateRenderPipeline {
+                    index_format,
+                    ..
+                }) => index_format,
                 RenderShaderBinding::Pipeline(RenderPipeline { index_format, .. }) => index_format,
             };
 
-            match index_format {
-                Some(_) => {
-                    if index.is_none() {
-                        panic!(
-                            "Index buffer is required when shader has index format, setup with shader.set_index_format() or render_pass.set_shader_ex()"
-                        );
-                    }
-                }
-                None => {
-                    if index.is_some() {
-                        panic!(
-                            "Index buffer is set, but shader does not require it, setup with shader.set_index_format() or render_pass.set_shader_ex()"
-                        );
-                    }
-                }
+            if index_format.is_none() && index.is_some() {
+                panic!("Index buffer is set, but shader not configured to use index buffer");
             }
         }
 
@@ -944,7 +933,7 @@ impl RenderPass {
     #[inline]
     pub fn draw_indirect(&mut self, buffer: &Buffer, offset: u64) {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if buffer.inner.borrow().usage != wgpu::BufferUsages::INDIRECT {
+        if buffer.inner.borrow().usage.contains(BufferUsage::INDIRECT) {
             panic!("Buffer must have INDIRECT usage");
         }
 
@@ -953,7 +942,8 @@ impl RenderPass {
 
     #[inline]
     pub fn draw_indexed_indirect(&mut self, buffer: &Buffer, offset: u64) {
-        if buffer.inner.borrow().usage != wgpu::BufferUsages::INDIRECT {
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        if buffer.inner.borrow().usage.contains(BufferUsage::INDIRECT) {
             panic!("Buffer must have INDIRECT usage");
         }
 

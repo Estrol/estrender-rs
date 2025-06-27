@@ -13,13 +13,14 @@ fn main() {
         .build()
         .expect("Failed to create GPU");
 
-    let mut msaa_texture = Some(gpu
-        .create_texture()
-        .with_render_target(Rect::new(0, 0, 800, 600), None)
-        .with_usage(TextureUsage::Sampler)
-        .with_sample_count(SampleCount::SampleCount4)
-        .build()
-        .expect("Failed to create MSAA texture"));
+    let mut msaa_texture = Some(
+        gpu.create_texture()
+            .with_render_target(Rect::new(0, 0, 800, 600), None)
+            .with_usage(TextureUsage::Sampler)
+            .with_sample_count(SampleCount::SampleCount4)
+            .build()
+            .expect("Failed to create MSAA texture"),
+    );
 
     let mut msaa_count = SampleCount::SampleCount4;
     let mut window_size = Point2::new(800, 600);
@@ -27,7 +28,7 @@ fn main() {
     while runner.pool_events(None) {
         for event in runner.get_events() {
             match event {
-                Event::Closed { .. } => {
+                Event::WindowClosed { .. } => {
                     return;
                 }
                 Event::KeyboardInput { key, pressed, .. } => {
@@ -62,7 +63,10 @@ fn main() {
                         } else {
                             msaa_texture = Some(
                                 gpu.create_texture()
-                                    .with_render_target(Rect::new(0, 0, window_size.x, window_size.y), None)
+                                    .with_render_target(
+                                        Rect::new(0, 0, window_size.x, window_size.y),
+                                        None,
+                                    )
                                     .with_usage(TextureUsage::Sampler)
                                     .with_sample_count(msaa_count)
                                     .build()
@@ -71,7 +75,7 @@ fn main() {
                         }
                     }
                 }
-                Event::Resized { size, .. } => {
+                Event::WindowResized { size, .. } => {
                     if size.x <= 0 || size.y <= 0 {
                         eprintln!("Invalid window size: {:?}", size);
                         continue;
@@ -80,13 +84,14 @@ fn main() {
                     window_size = *size;
 
                     // Resize the MSAA texture to match the new window size
-                    msaa_texture = Some(gpu
-                        .create_texture()
-                        .with_render_target(Rect::new(0, 0, size.x, size.y), None)
-                        .with_usage(TextureUsage::Sampler)
-                        .with_sample_count(msaa_count)
-                        .build()
-                        .expect("Failed to resize MSAA texture"));
+                    msaa_texture = Some(
+                        gpu.create_texture()
+                            .with_render_target(Rect::new(0, 0, size.x, size.y), None)
+                            .with_usage(TextureUsage::Sampler)
+                            .with_sample_count(msaa_count)
+                            .build()
+                            .expect("Failed to resize MSAA texture"),
+                    );
                 }
                 _ => {}
             }

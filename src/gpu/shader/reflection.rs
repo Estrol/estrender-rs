@@ -34,16 +34,22 @@ pub struct BinaryShader {
 const BINARY_SHADER_MAGIC: [u8; 20] = *b"est-binary-shader-v1";
 
 fn read_u32(cursor: &mut Cursor<&[u8]>) -> Result<u32, String> {
-    cursor.read_u32::<LittleEndian>().map_err(|_| "Failed to read u32".to_string())
+    cursor
+        .read_u32::<LittleEndian>()
+        .map_err(|_| "Failed to read u32".to_string())
 }
 
 fn read_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64, String> {
-    cursor.read_u64::<LittleEndian>().map_err(|_| "Failed to read u64".to_string())
+    cursor
+        .read_u64::<LittleEndian>()
+        .map_err(|_| "Failed to read u64".to_string())
 }
 
 fn read_bytes(cursor: &mut Cursor<&[u8]>, len: usize) -> Result<Vec<u8>, String> {
     let mut buf = vec![0; len];
-    cursor.read_exact(&mut buf).map_err(|_| "Failed to read bytes".to_string())?;
+    cursor
+        .read_exact(&mut buf)
+        .map_err(|_| "Failed to read bytes".to_string())?;
     Ok(buf)
 }
 
@@ -56,7 +62,9 @@ pub fn load_binary_shader(data: &[u8]) -> Result<BinaryShader, String> {
     let mut cursor = Cursor::new(data);
 
     let mut magic = [0; 20];
-    cursor.read_exact(&mut magic).map_err(|_| "Failed to read magic".to_string())?;
+    cursor
+        .read_exact(&mut magic)
+        .map_err(|_| "Failed to read magic".to_string())?;
     if magic != BINARY_SHADER_MAGIC {
         return Err("Invalid shader magic".to_string());
     }
@@ -93,7 +101,12 @@ pub fn load_binary_shader(data: &[u8]) -> Result<BinaryShader, String> {
             t => return Err(format!("Unknown binding type ID: {}", t)),
         };
 
-        bindings.push(ShaderBindingInfo { binding, group, name, ty });
+        bindings.push(ShaderBindingInfo {
+            binding,
+            group,
+            name,
+            ty,
+        });
     }
 
     let vertex_input = if shader_type_id == 0 || shader_type_id == 2 {
@@ -125,14 +138,25 @@ pub fn load_binary_shader(data: &[u8]) -> Result<BinaryShader, String> {
             attributes.push((location, offset, ty));
         }
 
-        Some(VertexInputReflection { name, stride, attributes })
+        Some(VertexInputReflection {
+            name,
+            stride,
+            attributes,
+        })
     } else {
         None
     };
 
     let reflect = match shader_type_id {
-        0 => ShaderReflect::Vertex { entry_point, input: vertex_input, bindings },
-        1 => ShaderReflect::Fragment { entry_point, bindings },
+        0 => ShaderReflect::Vertex {
+            entry_point,
+            input: vertex_input,
+            bindings,
+        },
+        1 => ShaderReflect::Fragment {
+            entry_point,
+            bindings,
+        },
         2 => {
             let parts: Vec<&str> = entry_point.split(',').collect();
             if parts.len() != 2 {
@@ -145,7 +169,10 @@ pub fn load_binary_shader(data: &[u8]) -> Result<BinaryShader, String> {
                 bindings,
             }
         }
-        3 => ShaderReflect::Compute { entry_point, bindings },
+        3 => ShaderReflect::Compute {
+            entry_point,
+            bindings,
+        },
         t => return Err(format!("Unknown shader type ID: {}", t)),
     };
 

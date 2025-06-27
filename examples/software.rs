@@ -19,10 +19,10 @@ fn main() {
     while runner.pool_events(None) {
         for event in runner.get_events() {
             match event {
-                Event::Closed { .. } => {
+                Event::WindowClosed { .. } => {
                     return;
                 }
-                Event::Resized { size, .. } => {
+                Event::WindowResized { size, .. } => {
                     pixels.resize((size.x * size.y) as usize, 128);
                 }
                 _ => {}
@@ -37,5 +37,7 @@ fn main() {
 
 #[cfg(not(feature = "software"))]
 fn main() {
-    eprintln!("Software rendering is not enabled. Please enable the 'software' feature to run this example.");
+    eprintln!(
+        "Software rendering is not enabled. Please enable the 'software' feature to run this example."
+    );
 }

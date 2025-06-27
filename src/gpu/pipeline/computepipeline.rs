@@ -5,7 +5,9 @@ use std::{
 
 use crate::{
     gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, ComputePipelineDesc, ComputeShader, IntermediateComputeBinding, GPUInner, ShaderBindingType, ShaderReflect, Texture, TextureSampler
+        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, ComputePipelineDesc,
+        ComputeShader, IntermediateComputeBinding, ShaderBindingType, ShaderReflect, Texture,
+        TextureSampler, gpu_inner::GPUInner,
     },
     utils::ArcRef,
 };
@@ -35,10 +37,7 @@ impl ComputePipelineBuilder {
     }
 
     #[inline]
-    pub fn set_shader(
-        mut self,
-        shader: Option<&ComputeShader>,
-    ) -> Self {
+    pub fn set_shader(mut self, shader: Option<&ComputeShader>) -> Self {
         match shader {
             Some(shader) => {
                 let shader_inner = shader.inner.borrow();
@@ -47,9 +46,7 @@ impl ComputePipelineBuilder {
 
                 let shader_reflect = shader_inner.reflection.clone();
                 let entry_point = match &shader_reflect {
-                    ShaderReflect::Compute { entry_point, .. } => {
-                        entry_point.clone()
-                    }
+                    ShaderReflect::Compute { entry_point, .. } => entry_point.clone(),
                     _ => panic!("Shader must be a compute shader"),
                 };
 
@@ -413,7 +410,9 @@ impl ComputePipelineBuilder {
                 }
             } {
                 return Err(CompuitePipelineError::InvalidAttachmentType(
-                    attachment.group, attachment.binding, r#type.ty,
+                    attachment.group,
+                    attachment.binding,
+                    r#type.ty,
                 ));
             }
         }

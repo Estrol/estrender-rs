@@ -4,9 +4,12 @@ use std::sync::atomic::AtomicUsize;
 
 use wgpu::{Extent3d, TextureDescriptor};
 
-use crate::{dbg_log, gpu::buffer::BufferUsages, math::Rect, utils::ArcRef};
-
-use super::{buffer::BufferBuilder, inner::GPUInner};
+use crate::{
+    dbg_log,
+    gpu::{BufferBuilder, buffer::BufferUsage, gpu_inner::GPUInner},
+    math::Rect,
+    utils::ArcRef,
+};
 
 mod types;
 pub use types::*;
@@ -131,12 +134,23 @@ pub struct TextureInner {
     pub(crate) blend: TextureBlend,
     pub(crate) sampler_info: TextureSampler,
     pub(crate) format: TextureFormat,
+
+    pub(crate) mapped: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Texture {
     pub(crate) graphics: ArcRef<GPUInner>,
     pub(crate) inner: ArcRef<TextureInner>,
+
+    pub(crate) mapped_buffer: Vec<u8>,
+    pub(crate) mapped_type: TextureMappedType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureMappedType {
+    Read,
+    Write,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,6 +161,8 @@ pub enum TextureError {
     InvalidTextureFormat,
     FailedToWrite,
     FailedToRead,
+    AlreadyMapped,
+    NotMapped,
 }
 
 impl std::fmt::Display for TextureError {
@@ -158,6 +174,8 @@ impl std::fmt::Display for TextureError {
             TextureError::InvalidTextureFormat => write!(f, "Invalid texture format"),
             TextureError::FailedToWrite => write!(f, "Failed to write to texture"),
             TextureError::FailedToRead => write!(f, "Failed to read from texture"),
+            TextureError::AlreadyMapped => write!(f, "Texture is already mapped"),
+            TextureError::NotMapped => write!(f, "Texture is not mapped"),
         }
     }
 }
@@ -417,11 +435,15 @@ impl Texture {
             sampler_info: sampler,
             size,
             format,
+
+            mapped: false,
         };
 
         Ok(Self {
             graphics: ArcRef::clone(&graphics),
             inner: ArcRef::new(inner),
+            mapped_buffer: vec![],
+            mapped_type: TextureMappedType::Write,
         })
     }
 
@@ -461,7 +483,7 @@ impl Texture {
 
         let buffer = BufferBuilder::<u8>::new(self.graphics.clone())
             .set_data_vec(padded_data)
-            .set_usage(BufferUsages::COPY_SRC)
+            .set_usage(BufferUsage::COPY_SRC)
             .build();
 
         if buffer.is_err() {
@@ -525,8 +547,8 @@ impl Texture {
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
 
         let buffer = BufferBuilder::<u8>::new(self.graphics.clone())
-            .set_len((padded_bytes_per_row * inner.size.h as u32) as usize)
-            .set_usage(BufferUsages::COPY_DST | BufferUsages::MAP_READ)
+            .set_data_empty((padded_bytes_per_row * inner.size.h as u32) as usize)
+            .set_usage(BufferUsage::COPY_DST | BufferUsage::MAP_READ)
             .build();
 
         if buffer.is_err() {
@@ -593,6 +615,66 @@ impl Texture {
             std::ptr::copy_nonoverlapping(ptr as *const T, out.as_mut_ptr(), len);
         }
         Ok(out)
+    }
+
+    pub fn map(&mut self, map_type: TextureMappedType) -> Result<&mut Vec<u8>, TextureError> {
+        let mut inner = self.inner.borrow_mut();
+        if inner.mapped {
+            dbg_log!("Texture is already mapped");
+            return Err(TextureError::AlreadyMapped);
+        }
+
+        match map_type {
+            TextureMappedType::Read => {
+                inner.mapped = true;
+                drop(inner);
+
+                self.mapped_type = TextureMappedType::Read;
+                self.mapped_buffer = self.read::<u8>()?;
+
+                return Ok(&mut self.mapped_buffer);
+            }
+            TextureMappedType::Write => {
+                inner.mapped = true;
+                drop(inner);
+
+                self.mapped_type = TextureMappedType::Write;
+                self.mapped_buffer =
+                    vec![0; (self.inner.borrow().size.w * self.inner.borrow().size.h * 4) as usize];
+
+                return Ok(&mut self.mapped_buffer);
+            }
+        }
+    }
+
+    pub fn unmap(&mut self) -> Result<(), TextureError> {
+        let mut inner = self.inner.borrow_mut();
+        if !inner.mapped {
+            dbg_log!("Texture is not mapped");
+            return Err(TextureError::NotMapped);
+        }
+
+        match self.mapped_type {
+            TextureMappedType::Read => {
+                inner.mapped = false;
+                self.mapped_buffer.clear();
+            }
+            TextureMappedType::Write => {
+                inner.mapped = false;
+
+                drop(inner);
+                let buffer = self.mapped_buffer.clone();
+
+                if let Err(e) = self.write::<u8>(&buffer) {
+                    dbg_log!("Failed to write texture data: {}", e);
+                    return Err(e);
+                }
+
+                self.mapped_buffer = vec![];
+            }
+        }
+
+        Ok(())
     }
 }
 

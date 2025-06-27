@@ -9,9 +9,10 @@ use wgpu::CommandEncoder;
 use crate::gpu::ShaderReflect;
 use crate::{
     gpu::{
-        pipeline_manager::ComputePipelineDesc, shader::ComputeShader, BindGroupCreateInfo, BindGroupLayout, ComputePipeline
+        BindGroupCreateInfo, BindGroupLayout, ComputePipeline, ComputePipelineDesc,
+        gpu_inner::GPUInner, shader::ComputeShader,
     },
-    prelude::{Buffer, BufferUsages, GPUInner, ShaderBindingType},
+    prelude::{Buffer, BufferUsage, ShaderBindingType},
     utils::ArcRef,
 };
 
@@ -195,7 +196,7 @@ impl ComputePass {
         group: u32,
         binding: u32,
         attachment: Option<&[T]>,
-        usages: BufferUsages,
+        usages: BufferUsage,
     ) where
         T: bytemuck::Pod + bytemuck::Zeroable,
     {
@@ -404,23 +405,28 @@ impl ComputePass {
                         Some(bind_group) => bind_group,
                         None => {
                             let mut bind_group_attachments: HashMap<
-                                u32, 
-                                Vec<wgpu::BindGroupEntry>
+                                u32,
+                                Vec<wgpu::BindGroupEntry>,
                             > = inner.attachments.iter().fold(HashMap::new(), |mut map, e| {
-                                let (group, binding, attachment) = (e.group, e.binding, &e.attachment);
+                                let (group, binding, attachment) =
+                                    (e.group, e.binding, &e.attachment);
 
                                 let entry = match attachment {
-                                    BindGroupType::TextureStorage(texture) => wgpu::BindGroupEntry {
-                                        binding,
-                                        resource: wgpu::BindingResource::TextureView(texture),
-                                    },
+                                    BindGroupType::TextureStorage(texture) => {
+                                        wgpu::BindGroupEntry {
+                                            binding,
+                                            resource: wgpu::BindingResource::TextureView(texture),
+                                        }
+                                    }
                                     BindGroupType::Storage(buffer) => wgpu::BindGroupEntry {
                                         binding,
-                                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                            buffer,
-                                            offset: 0,
-                                            size: None,
-                                        }),
+                                        resource: wgpu::BindingResource::Buffer(
+                                            wgpu::BufferBinding {
+                                                buffer,
+                                                offset: 0,
+                                                size: None,
+                                            },
+                                        ),
                                     },
                                     _ => panic!("Unsupported bind group type"),
                                 };
@@ -505,7 +511,10 @@ impl ComputePass {
 
                     match gpu_inner.get_compute_pipeline(pipeline_hash_key) {
                         Some(pipeline) => pipeline,
-                        None => gpu_inner.create_compute_pipeline(pipeline_hash_key, pipeline.pipeline_desc.clone()),
+                        None => gpu_inner.create_compute_pipeline(
+                            pipeline_hash_key,
+                            pipeline.pipeline_desc.clone(),
+                        ),
                     }
                 };
 
@@ -515,7 +524,6 @@ impl ComputePass {
                 panic!("Compute shader or pipeline must be set before dispatching");
             }
         }
-        
     }
 
     fn end(&mut self) {

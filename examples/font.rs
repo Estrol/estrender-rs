@@ -21,12 +21,17 @@ fn main() {
         .load_font("Arial", None, 20.0)
         .expect("Failed to load font");
 
-    let (data, width, height) = font.bake_text("Hello, world!", FontBakeFormat::Rgba)
+    let (data, width, height) = font
+        .bake_text("Hello, world!", FontBakeFormat::Rgba)
         .expect("Failed to bake text");
 
     let texture = gpu
         .create_texture()
-        .with_raw(&data, Rect::new(0, 0, width, height), TextureFormat::Bgra8Unorm)
+        .with_raw(
+            &data,
+            Rect::new(0, 0, width, height),
+            TextureFormat::Bgra8Unorm,
+        )
         .with_usage(TextureUsage::Sampler)
         .build()
         .expect("Failed to create texture");
@@ -34,7 +39,7 @@ fn main() {
     while runner.pool_events(None) {
         for event in runner.get_events() {
             match event {
-                Event::Closed { .. } => {
+                Event::WindowClosed { .. } => {
                     return;
                 }
                 _ => {}
@@ -47,21 +52,14 @@ fn main() {
 
                 if let Some(mut drawing) = gp.begin_drawing() {
                     drawing.set_texture(Some(&texture));
-                    drawing
-                        .rectangle_filled(
-                            Vector2::new(100.0, 100.0),
-                            Vector2::new(200.0, 200.0),
-                            Color::RED,
-                        );
+                    drawing.rectangle_filled(
+                        Vector2::new(100.0, 100.0),
+                        Vector2::new(200.0, 200.0),
+                        Color::RED,
+                    );
 
                     drawing.set_texture(None);
-                    drawing
-                        .circle_filled(
-                            Vector2::new(400.0, 300.0),
-                            50.0,
-                            25,
-                            Color::GREEN,
-                        );
+                    drawing.circle_filled(Vector2::new(400.0, 300.0), 50.0, 25, Color::GREEN);
                 }
             }
         }

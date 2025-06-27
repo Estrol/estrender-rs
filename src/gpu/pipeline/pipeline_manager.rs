@@ -3,7 +3,7 @@ use std::{collections::HashMap, hash::Hash};
 use crate::dbg_log;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PipelineManager {
+pub(crate) struct PipelineManager {
     pub graphics_pipelines: HashMap<usize, (wgpu::RenderPipeline, usize)>,
     pub compute_pipelines: HashMap<usize, (wgpu::ComputePipeline, usize)>,
 }
@@ -11,14 +11,14 @@ pub struct PipelineManager {
 const PIPELINE_LIFETIME_FRAMES: usize = 50;
 
 #[derive(Debug, Clone, Hash)]
-pub struct VertexAttributeLayout {
+pub(crate) struct VertexAttributeLayout {
     pub stride: wgpu::BufferAddress,
     pub step_mode: wgpu::VertexStepMode,
     pub attributes: Vec<wgpu::VertexAttribute>,
 }
 
 #[derive(Debug, Clone, Hash)]
-pub struct GraphicsPipelineDesc {
+pub(crate) struct GraphicsPipelineDesc {
     pub shaders: (wgpu::ShaderModule, wgpu::ShaderModule),
     pub entry_point: (String, String),
     pub render_target: wgpu::TextureFormat,
@@ -32,7 +32,7 @@ pub struct GraphicsPipelineDesc {
 }
 
 #[derive(Debug, Clone, Hash)]
-pub struct ComputePipelineDesc {
+pub(crate) struct ComputePipelineDesc {
     pub shader_module: wgpu::ShaderModule,
     pub entry_point: String,
     pub bind_group_layout: Vec<wgpu::BindGroupLayout>,

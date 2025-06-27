@@ -3,16 +3,15 @@ use std::sync::Arc;
 use wgpu::{PipelineCache, Surface, SurfaceTexture};
 use winit::dpi::PhysicalSize;
 
-use crate::dbg_log;
-use crate::gpu::{AdapterBackend, BindGroupCreateInfo};
-use crate::{utils::ArcMut, window::Handle};
-
-use super::{
-    BindGroupManager, Buffer, ComputePipelineDesc, GPUAdapter, GraphicsPipelineDesc,
-    GraphicsShader, PipelineManager, SwapchainError, Texture,
+use crate::{
+    gpu::{
+        AdapterBackend, BindGroupCreateInfo, BindGroupManager, Buffer, ComputePipelineDesc,
+        GPUAdapter, GraphicsPipelineDesc, GraphicsShader, Limits, PipelineManager, SwapchainError,
+        Texture,
+    },
+    runner::runner_inner::Handle,
+    utils::ArcMut,
 };
-
-use super::Limits;
 
 lazy_static::lazy_static! {
     pub static ref INSTANCE_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -311,7 +310,6 @@ impl GPUInner {
             pipeline_cache = Some(unsafe { device.create_pipeline_cache(&pipeline_cache_desc) });
         }
 
-        // let buffer_manager = BufferManager::new();
         let pipeline_manager = PipelineManager::new();
         let bind_group_manager = BindGroupManager::new();
 
@@ -330,7 +328,6 @@ impl GPUInner {
             queue: Some(queue),
             adapter: Some(adapter),
             pipeline_cache,
-            // buffer_manager: Some(buffer_manager),
             pipeline_manager: Some(pipeline_manager),
             bind_group_manager: Some(bind_group_manager),
             drawing_default_shader: None,
@@ -641,8 +638,6 @@ impl Drop for GPUInner {
         if let Some(pipeline_cache) = &self.pipeline_cache {
             let data = pipeline_cache.get_data();
             if let Some(data) = data {
-                use crate::dbg_log;
-
                 let path = std::env::current_exe().unwrap();
                 let path = path.parent().unwrap();
 
@@ -651,11 +646,11 @@ impl Drop for GPUInner {
 
                 std::fs::write(&pipeline_cache_path, data).unwrap();
 
-                dbg_log!("Saving pipeline cache to {:?}", pipeline_cache_path);
+                crate::dbg_log!("Saving pipeline cache to {:?}", pipeline_cache_path);
             }
         }
 
-        dbg_log!("GPU destroyed");
+        crate::dbg_log!("GPU destroyed");
     }
 }
 

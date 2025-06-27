@@ -37,11 +37,38 @@ impl Into<wgpu::Extent3d> for Point2 {
     }
 }
 
+impl Into<PhysicalSize<u32>> for Point2 {
+    fn into(self) -> PhysicalSize<u32> {
+        PhysicalSize {
+            width: self.x as u32,
+            height: self.y as u32,
+        }
+    }
+}
+
 impl From<PhysicalSize<u32>> for Point2 {
     fn from(size: PhysicalSize<u32>) -> Self {
         Self {
             x: size.width as i32,
             y: size.height as i32,
+        }
+    }
+}
+
+impl Into<PhysicalSize<i32>> for Point2 {
+    fn into(self) -> PhysicalSize<i32> {
+        PhysicalSize {
+            width: self.x,
+            height: self.y,
+        }
+    }
+}
+
+impl From<PhysicalSize<i32>> for Point2 {
+    fn from(size: PhysicalSize<i32>) -> Self {
+        Self {
+            x: size.width,
+            y: size.height,
         }
     }
 }

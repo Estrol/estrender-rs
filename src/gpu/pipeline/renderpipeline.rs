@@ -5,7 +5,11 @@ use std::{
 
 use crate::{
     gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, GPUInner, GraphicsPipelineDesc, GraphicsShader, IntermediateRenderPipeline, IndexBufferSize, ShaderBindingType, ShaderCullMode, ShaderFrontFace, ShaderPollygonMode, ShaderReflect, ShaderTopology, ShaderType, Texture, TextureBlend, TextureSampler, VertexAttributeLayout
+        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, GraphicsPipelineDesc,
+        GraphicsShader, IndexBufferSize, IntermediateRenderPipeline, ShaderBindingType,
+        ShaderCullMode, ShaderFrontFace, ShaderPollygonMode, ShaderReflect, ShaderTopology,
+        ShaderType, Texture, TextureBlend, TextureSampler, VertexAttributeLayout,
+        gpu_inner::GPUInner,
     },
     utils::ArcRef,
 };
@@ -465,7 +469,9 @@ impl RenderPipelineBuilder {
                     };
 
                     bindings.iter().find_map(|shaderbinding| {
-                        if shaderbinding.group == attachment.group && shaderbinding.binding == attachment.binding {
+                        if shaderbinding.group == attachment.group
+                            && shaderbinding.binding == attachment.binding
+                        {
                             Some(shaderbinding)
                         } else {
                             None
@@ -503,7 +509,9 @@ impl RenderPipelineBuilder {
                 }
             } {
                 return Err(RenderPipelineError::InvalidAttachmentType(
-                    attachment.group, attachment.binding, r#type.ty,
+                    attachment.group,
+                    attachment.binding,
+                    r#type.ty,
                 ));
             }
         }

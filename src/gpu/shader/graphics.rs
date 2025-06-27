@@ -1,10 +1,12 @@
 use core::panic;
 use std::{borrow::Cow, collections::HashMap, hash::Hash};
 
-use wgpu::{naga::front::wgsl, BindingType, SamplerBindingType, ShaderRuntimeChecks, ShaderStages};
+use wgpu::{BindingType, SamplerBindingType, ShaderRuntimeChecks, ShaderStages, naga::front::wgsl};
 
 use crate::{
-    dbg_log, gpu::shader::reflection, prelude::{GPUInner, VertexInputReflection}, utils::ArcRef
+    dbg_log,
+    gpu::{VertexInputReflection, gpu_inner::GPUInner, shader::reflection},
+    utils::ArcRef,
 };
 
 use super::{
@@ -134,7 +136,7 @@ impl GraphicsShaderBuilder {
     }
 
     /// Sets the precompiled binary shader source code.
-    /// 
+    ///
     /// This is useful for using shaders compiled with tools like `glslangValidator` or `shaderc`.
     pub fn set_binary_source(mut self, binary: &[u8]) -> Self {
         self.source = GraphicsShaderSource::BinarySource(binary.to_vec());
@@ -142,7 +144,7 @@ impl GraphicsShaderBuilder {
     }
 
     /// Sets the precompiled binary vertex and fragment shader source code.
-    /// 
+    ///
     /// This is useful for using shaders compiled with tools like `glslangValidator` or `shaderc`.
     pub fn set_binary_file(mut self, path: &str) -> Self {
         let data = std::fs::read(path);
@@ -155,12 +157,13 @@ impl GraphicsShaderBuilder {
     }
 
     /// Sets the precompiled binary vertex shader source code.
-    /// 
+    ///
     /// You need to also set the fragment shader source code using `set_binary_fragment`.
     pub fn set_binary_vertex(mut self, binary: &[u8]) -> Self {
         match self.source {
             GraphicsShaderSource::BinarySplitSource(ref mut vertex_bin, _) => {
-                self.source = GraphicsShaderSource::BinarySplitSource(binary.to_vec(), vertex_bin.clone());
+                self.source =
+                    GraphicsShaderSource::BinarySplitSource(binary.to_vec(), vertex_bin.clone());
             }
             _ => {
                 self.source = GraphicsShaderSource::BinarySplitSource(binary.to_vec(), vec![]);
@@ -171,12 +174,13 @@ impl GraphicsShaderBuilder {
     }
 
     /// Sets the precompiled binary fragment shader source code.
-    /// 
+    ///
     /// You need to also set the vertex shader source code using `set_binary_vertex`.
     pub fn set_binary_fragment(mut self, binary: &[u8]) -> Self {
         match self.source {
             GraphicsShaderSource::BinarySplitSource(_, ref mut fragment_bin) => {
-                self.source = GraphicsShaderSource::BinarySplitSource(fragment_bin.clone(), binary.to_vec());
+                self.source =
+                    GraphicsShaderSource::BinarySplitSource(fragment_bin.clone(), binary.to_vec());
             }
             _ => {
                 self.source = GraphicsShaderSource::BinarySplitSource(vec![], binary.to_vec());
@@ -319,7 +323,10 @@ impl GraphicsShader {
         fn create_input_desc(reflection: &ShaderReflect) -> Result<VertexInputDescription, String> {
             let (vertex_input, stride) = match reflection {
                 ShaderReflect::Vertex { input, .. }
-                | ShaderReflect::VertexFragment { vertex_input: input, .. } => {
+                | ShaderReflect::VertexFragment {
+                    vertex_input: input,
+                    ..
+                } => {
                     let input = input.as_ref().ok_or("Missing vertex input")?;
                     (input, input.stride as wgpu::BufferAddress)
                 }
@@ -374,10 +381,7 @@ impl GraphicsShader {
                         force_loop_bounding: false,
                     };
 
-                    device.create_shader_module_trusted(
-                        desc,
-                        runtime_checks,
-                    )
+                    device.create_shader_module_trusted(desc, runtime_checks)
                 },
                 binary_shader.reflect,
             ))
@@ -408,11 +412,15 @@ impl GraphicsShader {
 
             GraphicsShaderSource::SplitSource(vertex_src, fragment_src) => {
                 let (vertex_module, vertex_reflect) = build_single_shader(device_ref, &vertex_src)?;
-                let (fragment_module, fragment_reflect) = build_single_shader(device_ref, &fragment_src)?;
+                let (fragment_module, fragment_reflect) =
+                    build_single_shader(device_ref, &fragment_src)?;
 
                 match (&vertex_reflect, &fragment_reflect) {
                     (ShaderReflect::Vertex { .. }, ShaderReflect::Fragment { .. }) => {
-                        let layout = Self::make_group_layout(device_ref, &[vertex_reflect.clone(), fragment_reflect.clone()]);
+                        let layout = Self::make_group_layout(
+                            device_ref,
+                            &[vertex_reflect.clone(), fragment_reflect.clone()],
+                        );
                         let input_desc = create_input_desc(&vertex_reflect)?;
                         Ok(Self {
                             graphics: ArcRef::clone(&graphics),
@@ -453,11 +461,15 @@ impl GraphicsShader {
 
             GraphicsShaderSource::BinarySplitSource(vertex_bin, fragment_bin) => {
                 let (vertex_module, vertex_reflect) = build_binary_shader(device_ref, &vertex_bin)?;
-                let (fragment_module, fragment_reflect) = build_binary_shader(device_ref, &fragment_bin)?;
+                let (fragment_module, fragment_reflect) =
+                    build_binary_shader(device_ref, &fragment_bin)?;
 
                 match (&vertex_reflect, &fragment_reflect) {
                     (ShaderReflect::Vertex { .. }, ShaderReflect::Fragment { .. }) => {
-                        let layout = Self::make_group_layout(device_ref, &[vertex_reflect.clone(), fragment_reflect.clone()]);
+                        let layout = Self::make_group_layout(
+                            device_ref,
+                            &[vertex_reflect.clone(), fragment_reflect.clone()],
+                        );
                         let input_desc = create_input_desc(&vertex_reflect)?;
                         Ok(Self {
                             graphics: ArcRef::clone(&graphics),

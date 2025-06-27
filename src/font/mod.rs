@@ -64,6 +64,12 @@ pub enum FontBakeFormat {
     Rgba,
 }
 
+pub enum FontError {
+    InvalidFontData(String),
+    GlyphNotFound(u32),
+    IoError(std::io::Error),
+}
+
 impl Font {
     pub(crate) fn new(info: FontInfo, size: f32, glyph_range: &[(u32, u32)]) -> Self {
         let data = std::fs::read(&info.path).expect("Failed to read font file");
@@ -112,7 +118,10 @@ impl Font {
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         if atlas_width > MAX_ATLAS_SIZE || atlas_height > MAX_ATLAS_SIZE {
-            panic!("Font texture atlas is too large, try reducing the number of glyphs.");
+            panic!(
+                "Font texture atlas is too large: {}x{} (max: {}x{})",
+                atlas_width, atlas_height, MAX_ATLAS_SIZE, MAX_ATLAS_SIZE
+            );
         }
 
         let mut x = 0;
@@ -136,7 +145,11 @@ impl Font {
 
             #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
             if y + glyph_height > atlas_height {
-                panic!("Font texture atlas is too small, try reducing the number of glyphs.");
+                // panic!("Font texture atlas is too small, try reducing the number of glyphs.");
+                panic!(
+                    "Font texture atlas is too small: {}x{} (max: {}x{}), trying to fit glyph: {} at ({}, {})",
+                    atlas_width, atlas_height, MAX_ATLAS_SIZE, MAX_ATLAS_SIZE, codepoint, x, y
+                );
             }
 
             for row in 0..glyph_height {
@@ -194,7 +207,11 @@ impl Font {
         }
     }
 
-    pub fn bake_text(&self, text: &str, format: FontBakeFormat) -> Result<(Vec<u8>, u32, u32), String> {
+    pub fn bake_text(
+        &self,
+        text: &str,
+        format: FontBakeFormat,
+    ) -> Result<(Vec<u8>, u32, u32), String> {
         let inner = self.inner.borrow();
 
         let mut pen = Vector2::new(0.0, 0.0);
@@ -279,9 +296,7 @@ impl Font {
         }
 
         match format {
-            FontBakeFormat::GrayScale => {
-                Ok((buffer, width as u32, height as u32))
-            }
+            FontBakeFormat::GrayScale => Ok((buffer, width as u32, height as u32)),
             FontBakeFormat::Rgba => {
                 let mut rgba_buffer = vec![0; width * height * 4];
                 for (i, pixel) in buffer.iter().enumerate() {

@@ -1,11 +1,15 @@
 use std::cell::{RefCell, RefMut};
 
 use crate::{
-    dbg_log, gpu::AttachmentConfigurator, math::{Color, Rect, RectF, Vector2, Vector3, Vertex}, prelude::{
-        BufferBuilder, BufferUsages, GraphicsShader, GraphicsShaderBuilder, IndexBufferSize,
+    dbg_log,
+    gpu::AttachmentConfigurator,
+    math::{Color, Rect, RectF, Vector2, Vector3, Vertex},
+    prelude::{
+        BufferBuilder, BufferUsage, GraphicsShader, GraphicsShaderBuilder, IndexBufferSize,
         ShaderBindingType, Texture, TextureBlend, TextureBuilder, TextureFormat, TextureSampler,
         TextureUsage,
-    }, utils::ArcRef
+    },
+    utils::ArcRef,
 };
 
 use super::RenderPass;
@@ -119,8 +123,8 @@ impl DrawingContext {
 
         if pass.graphics.borrow().drawing_vertex_buffer.is_none() {
             let vertex_buffer = BufferBuilder::<Vertex>::new(ArcRef::clone(&pass.graphics))
-                .set_usage(BufferUsages::VERTEX | BufferUsages::COPY_DST)
-                .set_len(1)
+                .set_usage(BufferUsage::VERTEX | BufferUsage::COPY_DST)
+                .set_data_empty(1)
                 .build();
 
             if vertex_buffer.is_err() {
@@ -132,8 +136,8 @@ impl DrawingContext {
 
         if pass.graphics.borrow().drawing_index_buffer.is_none() {
             let index_buffer = BufferBuilder::<u16>::new(ArcRef::clone(&pass.graphics))
-                .set_usage(BufferUsages::INDEX | BufferUsages::COPY_DST)
-                .set_len(1)
+                .set_usage(BufferUsage::INDEX | BufferUsage::COPY_DST)
+                .set_data_empty(1)
                 .build();
 
             if index_buffer.is_err() {
@@ -714,7 +718,7 @@ impl DrawingContext {
         drop(graphics_inner);
 
         // Resize vertex and index buffers if needed
-        if vertex_buffer.size < (vertices.len() * std::mem::size_of::<Vertex>()) as u64 {
+        if vertex_buffer.size() < (vertices.len() * std::mem::size_of::<Vertex>()) as u64 {
             let new_size = (vertices.len() * std::mem::size_of::<Vertex>()) as u64;
 
             vertex_buffer
@@ -722,7 +726,7 @@ impl DrawingContext {
                 .expect("Failed to resize vertex buffer");
         }
 
-        if index_buffer.size < (indices.len() * std::mem::size_of::<u16>()) as u64 {
+        if index_buffer.size() < (indices.len() * std::mem::size_of::<u16>()) as u64 {
             let new_size = (indices.len() * std::mem::size_of::<u16>()) as u64;
 
             index_buffer
@@ -750,7 +754,7 @@ impl DrawingContext {
                 .set_gpu_buffer(Some(&vertex_buffer), Some(&index_buffer));
 
             inner.pass.set_blend(Some(&blend));
-            
+
             inner.pass.set_attachment_texture(0, 0, Some(&texture));
             inner.pass.set_attachment_sampler(0, 1, Some(sampler));
 

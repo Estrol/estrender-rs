@@ -1,74 +1,13 @@
-#![cfg(feature = "software")]
-
-use std::{num::NonZero, sync::Arc};
-
-use softbuffer::{Context, Surface};
-use winit::dpi::PhysicalSize;
-
 use crate::{
     math::Vector2,
+    software::software_inner::{PixelBufferInner, SoftbufferContext, SoftbufferSurface},
     utils::ArcRef,
+    window::Window,
 };
-
-use super::Window;
-
-type SoftbufferSurface = Surface<Arc<winit::window::Window>, Arc<winit::window::Window>>;
-type SoftbufferContext = Context<Arc<winit::window::Window>>;
-
-pub(crate) struct PixelBufferInner {
-    pub _context: SoftbufferContext,
-    pub surface: SoftbufferSurface,
-    pub surface_size: Vector2,
-}
-
-impl PixelBufferInner {
-    pub fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), String> {
-        if size.width == 0 || size.height == 0 {
-            return Err("Invalid size".to_string());
-        }
-
-        self.surface_size = Vector2::new(size.width as f32, size.height as f32);
-
-        let width: NonZero<u32> = NonZero::new(size.width).ok_or("Width cannot be zero")?;
-        let height: NonZero<u32> = NonZero::new(size.height).ok_or("Height cannot be zero")?;
-
-        let result = self.surface.resize(width, height);
-        if result.is_err() {
-            return Err(format!(
-                "Failed to resize softbuffer surface: {:?}",
-                result.err()
-            ));
-        }
-
-        Ok(())
-    }
-}
 
 //// A wrapper around softbuffer to provide a soft buffer for pixel manipulation
 pub struct PixelBuffer {
     pub(crate) inner: ArcRef<PixelBufferInner>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum PixelWriteMode {
-    // Append to the existing pixel value
-    Copy,
-    // Replace the existing pixel value with the new one
-    Clear,
-    // Blend the new pixel value with the existing one, such as alpha blending
-    Blend,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum PixelBlendMode {
-    // Alpha blending
-    Alpha,
-    // Additive blending
-    Add,
-    // Subtractive blending
-    Subtract,
-    // Multiplicative blending
-    Multiply,
 }
 
 impl PixelBuffer {
@@ -76,19 +15,19 @@ impl PixelBuffer {
         let window_inner = window.inner.wait_borrow_mut();
 
         let window_handle = {
-            let handle = window_inner.window_pointer
+            let handle = window_inner
+                .window_pointer
                 .as_ref()
                 .ok_or("Window pointer is not set")?
                 .lock();
 
-            let window_handle = handle
-                .get_window();
+            let window_handle = handle.get_window();
 
             window_handle.clone()
         };
 
         let context = SoftbufferContext::new(window_handle.clone());
-        
+
         if context.is_err() {
             return Err(format!(
                 "Failed to create softbuffer context: {:?}",
@@ -97,8 +36,7 @@ impl PixelBuffer {
         }
 
         let context = context.unwrap();
-        let surface =
-            SoftbufferSurface::new(&context, window_handle);
+        let surface = SoftbufferSurface::new(&context, window_handle);
 
         if surface.is_err() {
             return Err(format!(
@@ -160,5 +98,48 @@ impl PixelBuffer {
         }
 
         Ok(())
+    }
+}
+
+pub struct PixelBufferBuilder<'a> {
+    window: Option<&'a mut Window>,
+}
+
+impl<'a> PixelBufferBuilder<'a> {
+    pub(crate) fn new() -> Self {
+        PixelBufferBuilder { window: None }
+    }
+
+    /// Sets the window for this PixelBuffer instance. \
+    /// This is useful for creating a PixelBuffer instance that is bound to a specific window.
+    pub fn with_window(mut self, window: &'a mut Window) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    pub fn build(self) -> Result<PixelBuffer, String> {
+        if self.window.is_none() {
+            return Err("PixelBuffer must be created with a window".to_string());
+        }
+
+        let window = self.window.unwrap();
+
+        let is_graphics_exist = {
+            let window_inner = window.inner.borrow();
+            window_inner.graphics.is_some()
+        };
+
+        if is_graphics_exist {
+            return Err(
+                "PixelBuffer cannot be created along side GPU (hardware rendering)".to_string(),
+            );
+        }
+
+        let pixel_buffer = PixelBuffer::new(window)?;
+
+        let mut window_inner = window.inner.borrow_mut();
+        window_inner.pixelbuffer = Some(pixel_buffer.inner.clone());
+
+        Ok(pixel_buffer)
     }
 }

@@ -1,11 +1,10 @@
 use wgpu::CommandEncoder;
 
-use crate::{dbg_log, log, math::Point2, utils::ArcRef};
+use crate::{dbg_log, gpu::gpu_inner::GPUInner, log, math::Point2, utils::ArcRef};
 
 use super::{
     SwapchainError, TextureUsage,
     buffer::Buffer,
-    inner::GPUInner,
     texture::{Texture, TextureBlend},
 };
 
@@ -187,21 +186,11 @@ impl CommandBuffer {
 
     /// Writes a buffer to a destination buffer.
     pub fn write_buffer(&mut self, src: &Buffer, dst: &Buffer) {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if dst.size < src.size {
-            panic!("Destination buffer is too small");
-        }
-
         dst.write_cmd(src, self);
     }
 
     /// Writes a buffer to a destination buffer with raw data.
     pub fn write_buffer_raw<T: bytemuck::Pod>(&mut self, data: &[T], dst: &Buffer) {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if dst.size < data.len() as u64 {
-            panic!("Destination buffer is too small");
-        }
-
         dst.write_raw_cmd(data, self);
     }
 
