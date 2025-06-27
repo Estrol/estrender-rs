@@ -26,6 +26,7 @@ pub enum PixelBufferError {
     ContextCreationFailed,
     SurfaceCreationFailed,
     InvalidSize(u32, u32),
+    InvalidSurfaceSize,
     BufferFetchFailed,
     BufferTooSmall,
     PresentFailed,
@@ -38,6 +39,7 @@ impl std::fmt::Display for PixelBufferError {
             PixelBufferError::ContextCreationFailed => write!(f, "Failed to create pixel buffer context"),
             PixelBufferError::SurfaceCreationFailed => write!(f, "Failed to create pixel buffer surface"),
             PixelBufferError::InvalidSize(width, height) => write!(f, "Invalid size: {}x{}", width, height),
+            PixelBufferError::InvalidSurfaceSize => write!(f, "Pixel buffer surface size is zero"),
             PixelBufferError::BufferFetchFailed => write!(f, "Failed to fetch pixel buffer"),
             PixelBufferError::BufferTooSmall => write!(f, "Pixel buffer is too small"),
             PixelBufferError::PresentFailed => write!(f, "Failed to present pixel buffer"),
@@ -51,4 +53,14 @@ pub enum PixelBufferBuilderError {
     WindowIsNull,
     CannotUseWithGPUWindow,
     PixelBufferError(PixelBufferError),
+}
+
+impl std::fmt::Display for PixelBufferBuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PixelBufferBuilderError::WindowIsNull => write!(f, "PixelBuffer must be created with a window"),
+            PixelBufferBuilderError::CannotUseWithGPUWindow => write!(f, "PixelBuffer cannot be created alongside GPU (hardware rendering)"),
+            PixelBufferBuilderError::PixelBufferError(e) => write!(f, "PixelBuffer error: {}", e),
+        }
+    }
 }

@@ -64,25 +64,25 @@ impl PixelBuffer {
     }
 
     /// Write pixels to the soft buffer surface
-    pub fn write_buffers(&mut self, pixels: &[u32], size: Vector2) -> Result<(), String> {
+    pub fn write_buffers(&mut self, pixels: &[u32], size: Vector2) -> Result<(), PixelBufferError> {
         let mut inner = self.inner.wait_borrow_mut();
 
         if pixels.len() != (size.x * size.y) as usize {
-            return Err("Invalid pixel buffer size".to_string());
+            return Err(PixelBufferError::InvalidSize(size.x as u32, size.y as u32));
         }
 
         if inner.surface_size == Vector2::new(0.0, 0.0) {
-            return Err("Pixel buffer surface size is zero".to_string());
+            return Err(PixelBufferError::InvalidSurfaceSize);
         }
 
         let pixel_buffers = inner.surface.buffer_mut();
         if pixel_buffers.is_err() {
-            return Err("Failed to get pixel buffer".to_string());
+            return Err(PixelBufferError::BufferFetchFailed);
         }
 
         let mut pixel_buffers = pixel_buffers.unwrap();
         if pixel_buffers.len() < pixels.len() {
-            return Err("Pixel buffer is too small".to_string());
+            return Err(PixelBufferError::BufferTooSmall);
         }
 
         for (i, pixel) in pixels.iter().enumerate() {
@@ -91,7 +91,7 @@ impl PixelBuffer {
 
         let res = pixel_buffers.present();
         if res.is_err() {
-            return Err(format!("Failed to present pixel buffer: {:?}", res.err()));
+            return Err(PixelBufferError::PresentFailed);
         }
 
         Ok(())
