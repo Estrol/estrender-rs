@@ -1,6 +1,6 @@
 use crate::{
     math::Vector2,
-    software::software_inner::{PixelBufferInner, SoftbufferContext, SoftbufferSurface},
+    software::{software_inner::{PixelBufferInner, SoftbufferContext, SoftbufferSurface}, PixelBufferBuilderError, PixelBufferError},
     utils::ArcRef,
     window::Window,
 };
@@ -11,38 +11,35 @@ pub struct PixelBuffer {
 }
 
 impl PixelBuffer {
-    pub(crate) fn new(window: &Window) -> Result<Self, String> {
+    pub(crate) fn new(window: &Window) -> Result<Self, PixelBufferError> {
         let window_inner = window.inner.wait_borrow_mut();
 
         let window_handle = {
             let handle = window_inner
                 .window_pointer
-                .as_ref()
-                .ok_or("Window pointer is not set")?
-                .lock();
+                .as_ref();
 
-            let window_handle = handle.get_window();
+            if handle.is_none() {
+                return Err(PixelBufferError::WindowPointerIsNull);
+            }
 
-            window_handle.clone()
+            let handle = handle.unwrap();
+            let window_handle = handle.lock().get_window().clone();
+
+            window_handle
         };
 
         let context = SoftbufferContext::new(window_handle.clone());
 
         if context.is_err() {
-            return Err(format!(
-                "Failed to create softbuffer context: {:?}",
-                context.err()
-            ));
+            return Err(PixelBufferError::ContextCreationFailed);
         }
 
         let context = context.unwrap();
         let surface = SoftbufferSurface::new(&context, window_handle);
 
         if surface.is_err() {
-            return Err(format!(
-                "Failed to create softbuffer surface: {:?}",
-                surface.err()
-            ));
+            return Err(PixelBufferError::SurfaceCreationFailed);
         }
 
         let surface = surface.unwrap();
@@ -117,9 +114,9 @@ impl<'a> PixelBufferBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> Result<PixelBuffer, String> {
+    pub fn build(self) -> Result<PixelBuffer, PixelBufferBuilderError> {
         if self.window.is_none() {
-            return Err("PixelBuffer must be created with a window".to_string());
+            return Err(PixelBufferBuilderError::WindowIsNull);
         }
 
         let window = self.window.unwrap();
@@ -130,12 +127,11 @@ impl<'a> PixelBufferBuilder<'a> {
         };
 
         if is_graphics_exist {
-            return Err(
-                "PixelBuffer cannot be created along side GPU (hardware rendering)".to_string(),
-            );
+            return Err(PixelBufferBuilderError::CannotUseWithGPUWindow);
         }
 
-        let pixel_buffer = PixelBuffer::new(window)?;
+        let pixel_buffer = PixelBuffer::new(window)
+            .map_err(|e| PixelBufferBuilderError::PixelBufferError(e))?;
 
         let mut window_inner = window.inner.borrow_mut();
         window_inner.pixelbuffer = Some(pixel_buffer.inner.clone());

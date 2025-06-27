@@ -15,6 +15,7 @@ fn main() {
         .expect("Failed to create pixel buffer");
 
     let mut pixels = vec![128u32; (800 * 600) as usize];
+    let mut size_px = Vector2::new(800.0, 600.0);
 
     while runner.pool_events(None) {
         for event in runner.get_events() {
@@ -24,12 +25,13 @@ fn main() {
                 }
                 Event::WindowResized { size, .. } => {
                     pixels.resize((size.x * size.y) as usize, 128);
+                    size_px = Vector2::new(size.x as f32, size.y as f32);
                 }
                 _ => {}
             }
         }
 
-        if let Err(e) = sw.write_buffers(&pixels, Vector2::new(800.0, 600.0)) {
+        if let Err(e) = sw.write_buffers(&pixels, size_px) {
             eprintln!("Error writing buffers: {}", e);
         }
     }
