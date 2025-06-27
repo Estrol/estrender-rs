@@ -1,6 +1,7 @@
 pub use super::gpu::*;
 pub use super::math::*;
 pub use super::window::*;
+pub use super::runner::*;
 pub use super::{create_gpu, create_runner};
 
 #[cfg(feature = "font")]
