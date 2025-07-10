@@ -1,35 +1,263 @@
-use std::cell::{RefCell, RefMut};
+//! Drawing, an intermediate mode drawing for some 2D primitives.
+
+use std::{cell::RefCell, collections::HashMap};
 
 use crate::{
-    dbg_log,
-    gpu::AttachmentConfigurator,
-    math::{Color, Rect, RectF, Vector2, Vector3, Vertex},
-    prelude::{
-        BufferBuilder, BufferUsage, GraphicsShader, GraphicsShaderBuilder, IndexBufferSize,
-        ShaderBindingType, Texture, TextureBlend, TextureBuilder, TextureFormat, TextureSampler,
+    dbg_log, font::{Font, FontManager}, gpu::{gpu_inner::GPUInner, AttachmentConfigurator, Buffer, BufferBuilder, BufferUsage, TextureAtlas}, math::{Color, Point2, RectF, Vector2, Vector3, Vertex}, prelude::{
+        GraphicsShader, GraphicsShaderBuilder, ShaderBindingType, Texture, TextureBuilder, TextureFormat, TextureSampler,
         TextureUsage,
-    },
-    utils::ArcRef,
+    }, utils::ArcRef
 };
 
 use super::RenderPass;
 
+#[derive(Clone, Debug)]
+pub(crate) struct DrawingGlobalState {
+    pub texture: Texture,
+    pub shader: GraphicsShader,
+    pub vertex_buffer: Buffer,
+    pub index_buffer: Buffer,
+
+    pub font_manager: FontManager,
+    pub font_textures: HashMap<String, Texture>,
+}
+
+impl DrawingGlobalState {
+    pub(crate) fn new(gpu_inner: &ArcRef<GPUInner>) -> Option<Self> {
+        let default_texture = TextureBuilder::new(ArcRef::clone(gpu_inner))
+            .set_raw_image(&[255u8, 255, 255, 255], Point2::new(1, 1), TextureFormat::Bgra8Unorm)
+            .set_usage(TextureUsage::Sampler)
+            .build()
+            .ok()?;
+
+        let default_shader = GraphicsShaderBuilder::new(ArcRef::clone(gpu_inner))
+            .set_source(include_str!("./resources/drawing_shader.wgsl"))
+            .build()
+            .ok()?;
+
+        let vtx_buffer = BufferBuilder::new(ArcRef::clone(gpu_inner))
+            .set_usage(BufferUsage::VERTEX | BufferUsage::COPY_DST)
+            .set_data_slice(&[Vertex::default(); 1])
+            .build()
+            .ok()?;
+
+        let idx_buffer = BufferBuilder::new(ArcRef::clone(gpu_inner))
+            .set_usage(BufferUsage::INDEX | BufferUsage::COPY_DST)
+            .set_data_slice(&[0u16; 1])
+            .build()
+            .ok()?;
+
+        let font_manager = FontManager::new();
+
+        Some(Self {
+            texture: default_texture,
+            shader: default_shader,
+            vertex_buffer: vtx_buffer,
+            index_buffer: idx_buffer,
+            font_manager,
+            font_textures: HashMap::new(),
+        })
+    }
+}
+
 pub(crate) struct DrawingContextInner {
     pass: RenderPass,
+    drawing_global_state: ArcRef<DrawingGlobalState>,
 
     vertices: Vec<Vertex>,
     indices: Vec<u16>,
 
-    texture: Option<(Texture, TextureBlend, TextureSampler)>,
+    texture: Option<(Texture, TextureSampler)>,
+    texture_uv: Option<RectF>,
+    texture_atlas_uv: Option<RectF>,
     shader: Option<GraphicsShader>,
     scissor: Option<RectF>,
     viewport: Option<RectF>,
     current_queue: Option<DrawingQueue>,
     queue: Vec<DrawingQueue>,
+
+    current_font: Option<Font>,
+    current_font_texture: Option<Texture>,
+}
+
+impl DrawingContextInner {
+    pub fn get_absolute_uv(&self) -> RectF {
+        fn remap_uv(rect1: RectF, rect2: RectF) -> RectF {
+            RectF {
+                x: rect2.x + (rect2.w - rect2.x) * rect1.x,
+                y: rect2.y + (rect2.h - rect2.y) * rect1.y,
+                w: rect2.x + (rect2.w - rect2.x) * rect1.w,
+                h: rect2.y + (rect2.h - rect2.y) * rect1.h,
+            }
+        }
+
+        fn resolve_uv(uv1: Option<RectF>, uv2: Option<RectF>) -> RectF {
+            match (uv1, uv2) {
+                (Some(r1), Some(r2)) => remap_uv(r1, r2),
+                (Some(r1), None) => r1,
+                (None, Some(r2)) => r2,
+                (None, None) => RectF::new(0.0, 0.0, 1.0, 1.0),
+            }
+        }
+
+        resolve_uv(self.texture_uv.clone(), self.texture_atlas_uv.clone())
+    }
+
+    pub fn push_geometry(
+        &mut self,
+        vertices: &[Vertex],
+        indices: &[u16],
+        has_image: bool,
+    ) {
+        if vertices.is_empty() || indices.is_empty() {
+            return;
+        }
+
+        let base_index = self.vertices.len() as u16;
+        let indices: Vec<u16> = indices.iter().map(|i| i + base_index).collect();
+        self.push_queue(indices.len() as u32, has_image);
+
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        {
+            for vertex in vertices {
+                if vertex.position.z != 0.0 {
+                    panic!("DrawingContext only supports 2D rendering with z = 0.0");
+                }
+
+                if vertex.texcoord.x < 0.0
+                    || vertex.texcoord.y < 0.0
+                    || vertex.texcoord.x > 1.0
+                    || vertex.texcoord.y > 1.0
+                {
+                    panic!("Texture coordinates must be in the range [0, 1]");
+                }
+            }
+        }
+
+        self.vertices.extend_from_slice(&vertices);
+        self.indices.extend_from_slice(&indices);
+    }
+
+    pub fn push_queue(
+        &mut self,
+        count: u32,
+        has_image: bool,
+    ) {
+        let mut push_new_queue = false;
+
+        if self.current_queue.is_some() {
+            let ref_queue = self.current_queue.as_ref().unwrap();
+
+            // Check if current queue has the same texture, if not push the queue
+            let current_texture = if has_image { &self.texture } else { &None };
+
+            let texture_changed = match (&ref_queue.texture, current_texture) {
+                (None, None) => false,
+                (Some(_), None) | (None, Some(_)) => true,
+                (
+                    Some((old_texture, old_sampler)),
+                    Some((new_texture, new_sampler)),
+                ) => {
+                    old_texture != new_texture
+                        || old_sampler != new_sampler
+                }
+            };
+
+            if texture_changed {
+                push_new_queue = true;
+            }
+
+            // Check if current queue has the same scissor, if not push the queue
+            if ref_queue.scissors != self.scissor {
+                push_new_queue = true;
+            }
+
+            // Check if current queue has the same viewport, if not push the queue
+            if ref_queue.viewport != self.viewport {
+                push_new_queue = true;
+            }
+
+            // check if current queue has the same shader, if not push the queue
+            if ref_queue.shader != self.shader {
+                push_new_queue = true;
+            }
+        } else {
+            push_new_queue = true;
+        }
+
+        // Figure a way to push queue with correct start, and count
+        if push_new_queue {
+            if let Some(queue) = self.current_queue.take() {
+                self.queue.push(queue);
+            }
+
+            self.current_queue = Some(DrawingQueue {
+                texture: self.texture.clone(),
+                shader: None,
+                scissors: self.scissor.clone(),
+                viewport: self.viewport.clone(),
+                start_index: self.indices.len() as u32,
+                start_vertex: 0, // TODO: Fix this
+                count,
+            });
+        } else {
+            let queue = self.current_queue.as_mut().unwrap();
+            queue.count += count;
+        }
+    }
+
+    pub fn load_font(&mut self, font_path: &str, range: Option<&[(u32, u32)]>, size: f32) {
+        let mut state = self.drawing_global_state.borrow_mut();
+        if let Some(font) = state.font_manager.load_font(font_path, range, size) {
+            if !state.font_textures.contains_key(font_path) {
+                let texture = font.create_texture_inner(&self.pass.graphics)
+                    .expect("Failed to create font texture");
+
+                state.font_textures.insert(font_path.to_string(), texture);
+            }
+
+            self.current_font = Some(font);
+            self.current_font_texture = state.font_textures.get(font_path).cloned();
+        } else {
+            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+            {
+                dbg_log!("Failed to load font: {}", font_path);
+            }
+        }
+    }
+
+    pub fn set_font(&mut self, font: &Font) {
+        let name = {
+            let font_inner = font.inner.borrow();
+            font_inner.info.path.clone().into_os_string().into_string()
+                .ok()
+        };
+
+        if name.is_none() {
+            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+            {
+                dbg_log!("Font path is None, cannot set font");
+            }
+            return;
+        }
+
+        let name = name.unwrap();
+
+        let mut state = self.drawing_global_state.borrow_mut();
+        if !state.font_textures.contains_key(&name) {
+            let texture = font.create_texture_inner(&self.pass.graphics)
+                .expect("Failed to create font texture");
+
+            state.font_textures.insert(name.to_string(), texture);
+        }
+
+        self.current_font = Some(font.clone());
+        self.current_font_texture = state.font_textures.get(&name).cloned();
+    }
 }
 
 pub(crate) struct DrawingQueue {
-    pub texture: Option<(Texture, TextureBlend, TextureSampler)>,
+    pub texture: Option<(Texture, TextureSampler)>,
     pub shader: Option<GraphicsShader>,
 
     pub scissors: Option<RectF>,
@@ -40,123 +268,46 @@ pub(crate) struct DrawingQueue {
     pub count: u32,
 }
 
+/// DrawingContext is an intermediate mode for drawing 2D primitives.
+///
+/// It provides methods to draw rectangles, lines, triangles, circles, and images with various options for colors and textures.
 pub struct DrawingContext {
     pub(crate) inner: ArcRef<DrawingContextInner>,
 
-    pub(crate) vertex_cache: Vec<Vector2>,
+    pub(crate) vertex_cache: Vec<Vertex>,
     pub(crate) index_cache: Vec<u16>,
 }
 
-pub(crate) const VERTEX_DRAWING_SHADER: &str = r#"
-// Vertex Shader
-struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) texCoord: vec2<f32>,
-};
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-    @location(1) texCoord: vec2<f32>,
-};
-
-@vertex
-fn main_vertex(input: VertexInput) -> VertexOutput {
-    var output: VertexOutput;
-    output.position = vec4<f32>(input.position, 1.0);
-    output.color = input.color;
-    output.texCoord = input.texCoord;
-    return output;
-}"#;
-
-pub(crate) const FRAGMENT_DRAWING_SHADER: &str = r#"
-// Fragment Shader
-@group(0) @binding(0) var myTexture: texture_2d<f32>;
-@group(0) @binding(1) var mySampler: sampler;
-
-struct FragmentInput {
-    @location(0) color: vec4<f32>,
-    @location(1) texCoord: vec2<f32>,
-};
-
-@fragment
-fn main_fragment(input: FragmentInput) -> @location(0) vec4<f32> {
-    let textureColor = textureSample(myTexture, mySampler, input.texCoord);
-    return input.color * textureColor;
-}"#;
-
 impl DrawingContext {
     pub(crate) fn new(pass: RenderPass) -> Option<Self> {
-        if pass.graphics.borrow().drawing_default_shader.is_none() {
-            let shader = GraphicsShaderBuilder::new(ArcRef::clone(&pass.graphics))
-                // .set_source(VERTEX_DRAWING_SHADER)
-                .set_vertex_code(VERTEX_DRAWING_SHADER)
-                .set_fragment_code(FRAGMENT_DRAWING_SHADER)
-                .build();
+        if pass.graphics.borrow().drawing_state.is_none() {
+            let state = DrawingGlobalState::new(&pass.graphics)?;
 
-            if shader.is_err() {
-                return None;
-            }
-
-            let mut shader = shader.unwrap();
-            shader
-                .set_vertex_index_ty(Some(IndexBufferSize::U16))
-                .expect("Failed to set vertex index type");
-
-            pass.graphics.borrow_mut().drawing_default_shader = Some(shader);
+            let mut gpu_inner = pass.graphics.borrow_mut();
+            gpu_inner.drawing_state = Some(ArcRef::new(state));
         }
 
-        if pass.graphics.borrow().drawing_default_texture.is_none() {
-            let data = vec![255u8, 255, 255, 255];
-            let texture = TextureBuilder::new(ArcRef::clone(&pass.graphics))
-                .with_raw(&data, Rect::with_size(1, 1), TextureFormat::Bgra8Unorm)
-                .with_usage(TextureUsage::Sampler)
-                .build();
-
-            if texture.is_err() {
-                return None;
-            }
-
-            pass.graphics.borrow_mut().drawing_default_texture = texture.ok();
-        }
-
-        if pass.graphics.borrow().drawing_vertex_buffer.is_none() {
-            let vertex_buffer = BufferBuilder::<Vertex>::new(ArcRef::clone(&pass.graphics))
-                .set_usage(BufferUsage::VERTEX | BufferUsage::COPY_DST)
-                .set_data_empty(1)
-                .build();
-
-            if vertex_buffer.is_err() {
-                return None;
-            }
-
-            pass.graphics.borrow_mut().drawing_vertex_buffer = vertex_buffer.ok();
-        }
-
-        if pass.graphics.borrow().drawing_index_buffer.is_none() {
-            let index_buffer = BufferBuilder::<u16>::new(ArcRef::clone(&pass.graphics))
-                .set_usage(BufferUsage::INDEX | BufferUsage::COPY_DST)
-                .set_data_empty(1)
-                .build();
-
-            if index_buffer.is_err() {
-                return None;
-            }
-
-            pass.graphics.borrow_mut().drawing_index_buffer = index_buffer.ok();
-        }
+        let drawing_state = ArcRef::clone(
+            &pass.graphics.borrow().drawing_state.as_ref().unwrap()
+        );
 
         let inner = DrawingContextInner {
             pass: pass,
+            drawing_global_state: drawing_state,
+
             vertices: Vec::new(),
             indices: Vec::new(),
             texture: None,
+            texture_uv: None,
+            texture_atlas_uv: None,
             shader: None,
             scissor: None,
             viewport: None,
             current_queue: None,
             queue: Vec::new(),
+            
+            current_font: None,
+            current_font_texture: None,
         };
 
         Some(DrawingContext {
@@ -198,7 +349,130 @@ impl DrawingContext {
         (vertices, indices)
     }
 
-    pub fn rectangle(&mut self, pos: Vector2, size: Vector2, thickness: f32, color: Color) {
+    #[allow(unused)]
+    pub fn load_font(&mut self, font_path: &str, range: Option<&[(u32, u32)]>, size: f32) {
+        let mut inner = self.inner.borrow_mut();
+        inner.load_font(font_path, range, size);
+    }
+
+    pub fn set_font(&mut self, font: &Font) {
+        let mut inner = self.inner.borrow_mut();
+        inner.set_font(font);
+    }
+
+    #[allow(unused)]
+    pub fn draw_text(&mut self, text: &str, pos: Vector2, color: Color) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.current_font.is_none() {
+            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+            {
+                dbg_log!("No font selected for drawing text");
+            }
+            return;
+        }
+
+        vec_clear(&mut self.vertex_cache);
+        vec_clear(&mut self.index_cache);
+
+        let font = inner.current_font.as_ref().unwrap();
+        let texture_size = font.texture_size();
+        let line_height = font.line_height();
+        let ascender = font.ascender();
+        let space_width = font.space_width();
+
+        // Calculate the minimum Y offset for the text
+        let mut pen_y = 0.0;
+        let mut min_y = f32::MAX;
+        for c in text.chars() {
+            let codepoint = c as u32;
+            if codepoint == 0 {
+                continue;
+            }
+
+            if codepoint == '\n' as u32 {
+                pen_y += line_height;
+                continue;
+            }
+
+            if let Ok(glyph) = font.get_glyph(codepoint) {
+                min_y = f32::min(min_y, pen_y + ascender - (glyph.bearing_y + glyph.height));
+            }
+        }
+
+        let mut pen = pos;
+        for c in text.chars() {
+            let codepoint = c as u32;
+            if codepoint == 0 {
+                continue;
+            }
+
+            if codepoint == '\n' as u32 {
+                pen.x = pos.x;
+                pen.y += line_height;
+                continue;
+            }
+
+            if codepoint == ' ' as u32 {
+                pen.x += space_width;
+                continue;
+            }
+
+            if let Ok(glyph) = font.get_glyph(codepoint) {
+                let x0 = pen.x + glyph.bearing_x;
+                let y0 = pen.y + ascender - (glyph.bearing_y + glyph.height) - min_y;
+                let x1 = x0 + glyph.width;
+                let y1 = y0 + glyph.height;
+
+                let uv_x0 = glyph.atlas_start_offset.x as f32 / texture_size.x as f32;
+                let uv_y0 = glyph.atlas_start_offset.y as f32 / texture_size.y as f32;
+                let uv_x1 = (glyph.atlas_start_offset.x + glyph.width) as f32 / texture_size.x as f32;
+                let uv_y1 = (glyph.atlas_start_offset.y + glyph.height) as f32 / texture_size.y as f32;
+
+                let vertices = [
+                    Vertex::new(Vector3::new(x0, y0, 0.0), color, Vector2::new(uv_x0, uv_y0)),
+                    Vertex::new(Vector3::new(x1, y0, 0.0), color, Vector2::new(uv_x1, uv_y0)),
+                    Vertex::new(Vector3::new(x1, y1, 0.0), color, Vector2::new(uv_x1, uv_y1)),
+                    Vertex::new(Vector3::new(x0, y1, 0.0), color, Vector2::new(uv_x0, uv_y1)),
+                ];
+
+                let base_index = self.vertex_cache.len() as u16;
+                let indices = [
+                    base_index + 0,
+                    base_index + 1,
+                    base_index + 2,
+                    base_index + 0,
+                    base_index + 2,
+                    base_index + 3,
+                ];
+
+                self.vertex_cache.extend_from_slice(&vertices);
+                self.index_cache.extend_from_slice(&indices);
+
+                pen.x += glyph.advance_x;
+            }
+        }
+
+        if self.index_cache.is_empty() {
+            return;
+        }
+
+        let mut all_vertices = &self.vertex_cache;
+        let mut all_indices = &self.index_cache;
+
+        let current_texture = inner.texture.clone();
+        let font_texture = inner.current_font_texture.clone();
+        inner.texture = Some((
+            font_texture.unwrap(),
+            TextureSampler::DEFAULT,
+        ));
+
+        inner.push_geometry(&all_vertices, &all_indices, true);
+
+        inner.texture = current_texture;
+    }
+
+    /// Draw hollow rectangle with a specified position, size, thickness, and color.
+    pub fn draw_rect(&mut self, pos: Vector2, size: Vector2, thickness: f32, color: Color) {
         let corners = [
             pos,
             pos + Vector2::new(size.x, 0.0),
@@ -222,6 +496,16 @@ impl DrawingContext {
             }
 
             let (vertices, mut indices) = line.unwrap();
+            let vertices = vertices
+                .iter()
+                .map(|v| {
+                    Vertex::new(
+                        Vector3::new(v.x, v.y, 0.0),
+                        color,
+                        Vector2::ZERO,
+                    )
+                })
+                .collect::<Vec<_>>();
 
             indices.iter_mut().for_each(|idx| *idx += index_offset);
             index_offset += vertices.len() as u16;
@@ -230,39 +514,66 @@ impl DrawingContext {
             all_indices.extend(indices);
         }
 
-        Self::submit_geometry(
-            &mut self.inner.borrow_mut(),
-            &all_vertices,
-            &all_indices,
-            color,
-        );
+        self.inner.borrow_mut()
+            .push_geometry(&all_vertices, &all_indices, false);
     }
 
-    pub fn line(&mut self, a: Vector2, b: Vector2, thickness: f32, color: Color) {
+    /// Draw line between two points with a specified thickness and color.
+    pub fn draw_line(&mut self, a: Vector2, b: Vector2, thickness: f32, color: Color) {
         let line = Self::construct_line(a, b, thickness);
         if line.is_none() {
             return;
         }
 
         let (vertices, indices) = line.unwrap();
+        let vertices = vertices
+            .iter()
+            .map(|v| {
+                Vertex::new(
+                    Vector3::new(v.x, v.y, 0.0),
+                    color,
+                    Vector2::ZERO,
+                )
+            })
+            .collect::<Vec<_>>();
 
-        Self::submit_geometry(&mut self.inner.borrow_mut(), &vertices, &indices, color);
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
     }
 
-    pub fn rectangle_filled(&mut self, pos: Vector2, size: Vector2, color: Color) {
+    /// Draw rectangle filled with a specified position, size, and color.
+    pub fn draw_rect_filled(&mut self, pos: Vector2, size: Vector2, color: Color) {
         let vertices = [
-            Vector2::new(pos.x, pos.y),
-            Vector2::new(pos.x + size.x, pos.y),
-            Vector2::new(pos.x + size.x, pos.y + size.y),
-            Vector2::new(pos.x, pos.y + size.y),
+            Vertex::new(
+                Vector3::new(pos.x, pos.y, 0.0),
+                color,
+                Vector2::ZERO,
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y, 0.0),
+                color,
+                Vector2::ZERO,
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y + size.y, 0.0),
+                color,
+                Vector2::ZERO,
+            ),
+            Vertex::new(
+                Vector3::new(pos.x, pos.y + size.y, 0.0),
+                color,
+                Vector2::ZERO,
+            ),
         ];
 
         let indices = [0, 1, 2, 0, 2, 3];
 
-        Self::submit_geometry(&mut self.inner.borrow_mut(), &vertices, &indices, color);
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
     }
 
-    pub fn rectangle_filled_colors(
+    /// Draw rectangle filled with specified colors for each corner.
+    pub fn draw_rect_filled_colors(
         &mut self,
         pos: Vector2,
         size: Vector2,
@@ -272,46 +583,46 @@ impl DrawingContext {
         color_bl: Color,
     ) {
         let vertices = [
-            Vector2::new(pos.x, pos.y),
-            Vector2::new(pos.x + size.x, pos.y),
-            Vector2::new(pos.x + size.x, pos.y + size.y),
-            Vector2::new(pos.x, pos.y + size.y),
+            Vertex::new(
+                Vector3::new(pos.x, pos.y, 0.0),
+                color_tl.into_srgb(),
+                Vector2::ZERO,
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y, 0.0),
+                color_tr.into_srgb(),
+                Vector2::ZERO,
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y + size.y, 0.0),
+                color_br.into_srgb(),
+                Vector2::ZERO,
+            ),
+            Vertex::new(
+                Vector3::new(pos.x, pos.y + size.y, 0.0),
+                color_bl.into_srgb(),
+                Vector2::ZERO,
+            ),
         ];
 
-        let colors = [color_tl, color_tr, color_br, color_bl];
-
-        let mut inner = self.inner.borrow_mut();
-        let base_index = inner.vertices.len() as u16;
         let indices = [
-            base_index + 0,
-            base_index + 1,
-            base_index + 2,
-            base_index + 0,
-            base_index + 2,
-            base_index + 3,
+            0, 1, 2, // First triangle
+            0, 2, 3, // Second triangle
         ];
 
-        Self::push_queue(&mut inner, indices.len() as u32);
-
-        let uvs = [
-            Vector2::new(0.0, 0.0), // Top-left
-            Vector2::new(1.0, 0.0), // Top-right
-            Vector2::new(1.0, 1.0), // Bottom-right
-            Vector2::new(0.0, 1.0), // Bottom-left
-        ];
-
-        for (i, vertex) in vertices.iter().enumerate() {
-            inner.vertices.push(Vertex::new(
-                Vector3::new(vertex.x, vertex.y, 0.0),
-                colors[i],
-                uvs[i],
-            ));
-        }
-
-        inner.indices.extend_from_slice(&indices);
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
     }
 
-    pub fn triangle(&mut self, a: Vector2, b: Vector2, c: Vector2, thickness: f32, color: Color) {
+    /// Draw triangle with specified vertices, thickness, and color.
+    pub fn draw_triangle(
+        &mut self,
+        a: Vector2,
+        b: Vector2,
+        c: Vector2,
+        thickness: f32,
+        color: Color,
+    ) {
         let points = [
             Vector2::new(a.x, a.y),
             Vector2::new(b.x, b.y),
@@ -335,6 +646,10 @@ impl DrawingContext {
             }
 
             let (vertices, mut indices) = line.unwrap();
+            let vertices = vertices
+                .iter()
+                .map(|v| Vertex::new(Vector3::new(v.x, v.y, 0.0), color, Vector2::ZERO))
+                .collect::<Vec<_>>();
 
             indices.iter_mut().for_each(|idx| *idx += index_offset);
             index_offset += vertices.len() as u16;
@@ -347,27 +662,26 @@ impl DrawingContext {
             return;
         }
 
-        Self::submit_geometry(
-            &mut self.inner.borrow_mut(),
-            &all_vertices,
-            &all_indices,
-            color,
-        );
+        self.inner.borrow_mut()
+            .push_geometry(&all_vertices, &all_indices, false);
     }
 
-    pub fn triangle_filled(&mut self, a: Vector2, b: Vector2, c: Vector2, color: Color) {
+    /// Draw triangle filled with specified vertices and color.
+    pub fn draw_triangle_filled(&mut self, a: Vector2, b: Vector2, c: Vector2, color: Color) {
         let vertices = [
-            Vector2::new(a.x, a.y),
-            Vector2::new(b.x, b.y),
-            Vector2::new(c.x, c.y),
+            Vertex::new(Vector3::new(a.x, a.y, 0.0), color, Vector2::ZERO),
+            Vertex::new(Vector3::new(b.x, b.y, 0.0), color, Vector2::ZERO),
+            Vertex::new(Vector3::new(c.x, c.y, 0.0), color, Vector2::ZERO),
         ];
 
         let indices = [0, 1, 2];
 
-        Self::submit_geometry(&mut self.inner.borrow_mut(), &vertices, &indices, color);
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
     }
 
-    pub fn circle(
+    /// Draw circle with a specified center, radius, number of segments, thickness, and color.
+    pub fn draw_circle(
         &mut self,
         center: Vector2,
         radius: f32,
@@ -405,6 +719,11 @@ impl DrawingContext {
             let (line_vertices, line_indices) = line.unwrap();
 
             let base_index = vertices.len() as u16;
+            let line_vertices: Vec<Vertex> = line_vertices
+                .iter()
+                .map(|v| Vertex::new(Vector3::new(v.x, v.y, 0.0), color, Vector2::ZERO))
+                .collect();
+
             vertices.extend(line_vertices);
             indices.extend(line_indices.into_iter().map(|i| i + base_index));
         }
@@ -413,10 +732,17 @@ impl DrawingContext {
             return;
         }
 
-        Self::submit_geometry(&mut self.inner.borrow_mut(), &vertices, &indices, color);
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
     }
 
-    pub fn circle_filled(&mut self, center: Vector2, radius: f32, segments: u32, color: Color) {
+    pub fn draw_circle_filled(
+        &mut self,
+        center: Vector2,
+        radius: f32,
+        segments: u32,
+        color: Color,
+    ) {
         if segments < 3 {
             return;
         }
@@ -428,14 +754,18 @@ impl DrawingContext {
         vec_clear(vertices);
         vec_clear(indices);
 
-        vertices.push(Vector2::new(center.x, center.y));
+        vertices.push(Vertex::new(
+            Vector3::new(center.x, center.y, 0.0),
+            color,
+            Vector2::ZERO,
+        ));
 
         for i in 0..segments {
             let angle = angle_step * i as f32;
             let x = center.x + radius * angle.cos();
             let y = center.y + radius * angle.sin();
 
-            vertices.push(Vector2::new(x, y));
+            vertices.push(Vertex::new(Vector3::new(x, y, 0.0), color, Vector2::ZERO));
             indices.push(i as u16 + 1);
         }
 
@@ -445,51 +775,134 @@ impl DrawingContext {
             return;
         }
 
-        Self::submit_geometry(&mut self.inner.borrow_mut(), &vertices, &indices, color);
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
     }
 
-    fn submit_geometry(
-        inner: &mut RefMut<'_, DrawingContextInner>,
-        vertices: &[Vector2],
-        indices: &[u16],
-        color: Color,
+    pub fn draw_rect_image(&mut self, pos: Vector2, size: Vector2, color: Color) {
+        let mut inner = self.inner.borrow_mut();
+        let uv: RectF = inner.get_absolute_uv();
+
+        let vertices = [
+            Vertex::new(
+                Vector3::new(pos.x, pos.y, 0.0),
+                color,
+                Vector2::new(uv.x, uv.y),
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y, 0.0),
+                color,
+                Vector2::new(uv.w, uv.y),
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y + size.y, 0.0),
+                color,
+                Vector2::new(uv.w, uv.h),
+            ),
+            Vertex::new(
+                Vector3::new(pos.x, pos.y + size.y, 0.0),
+                color,
+                Vector2::new(uv.x, uv.h),
+            ),
+        ];
+
+        let indices = [0, 1, 2, 0, 2, 3];
+        inner.push_geometry(&vertices, &indices, true);
+    }
+
+    pub fn draw_rect_image_colors(
+        &mut self,
+        pos: Vector2,
+        size: Vector2,
+        color_tl: Color,
+        color_tr: Color,
+        color_br: Color,
+        color_bl: Color,
     ) {
-        if vertices.is_empty() || indices.is_empty() {
+        let mut inner = self.inner.borrow_mut();
+        let uv = inner.get_absolute_uv();
+
+        let vertices = [
+            Vertex::new(
+                Vector3::new(pos.x, pos.y, 0.0),
+                color_tl,
+                Vector2::new(uv.x, uv.y),
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y, 0.0),
+                color_tr,
+                Vector2::new(uv.w, uv.y),
+            ),
+            Vertex::new(
+                Vector3::new(pos.x + size.x, pos.y + size.y, 0.0),
+                color_br,
+                Vector2::new(uv.w, uv.h),
+            ),
+            Vertex::new(
+                Vector3::new(pos.x, pos.y + size.y, 0.0),
+                color_bl,
+                Vector2::new(uv.x, uv.h),
+            ),
+        ];
+
+        let indices = [0, 1, 2, 0, 2, 3];
+        inner.push_geometry(&vertices, &indices, true);
+    }
+
+    pub fn draw_triangle_image(&mut self, a: Vector2, b: Vector2, c: Vector2, color: Color) {
+        let mut inner = self.inner.borrow_mut();
+        let uv = inner.get_absolute_uv();
+
+        let vertices = [
+            Vertex::new(Vector3::new(a.x, a.y, 0.0), color, Vector2::new(uv.x, uv.y)),
+            Vertex::new(Vector3::new(b.x, b.y, 0.0), color, Vector2::new(uv.w, uv.y)),
+            Vertex::new(
+                Vector3::new(c.x, c.y, 0.0),
+                color,
+                Vector2::new(uv.w * 0.5, uv.h),
+            ),
+        ];
+
+        let indices = [0, 1, 2];
+        inner.push_geometry(&vertices, &indices, true);
+    }
+
+    pub fn draw_circle_image(&mut self, center: Vector2, radius: f32, segments: u32, color: Color) {
+        if segments < 3 {
             return;
         }
 
-        let base_index = inner.vertices.len() as u16;
-        let indices: Vec<u16> = indices.iter().map(|i| i + base_index).collect();
-        Self::push_queue(inner, indices.len() as u32);
+        let mut inner = self.inner.borrow_mut();
+        let uv = inner.get_absolute_uv();
 
-        // Compute bounding box
-        let (min_x, max_x) = vertices
-            .iter()
-            .map(|v| v.x)
-            .fold((f32::MAX, f32::MIN), |(min, max), x| {
-                (min.min(x), max.max(x))
-            });
-        let (min_y, max_y) = vertices
-            .iter()
-            .map(|v| v.y)
-            .fold((f32::MAX, f32::MIN), |(min, max), y| {
-                (min.min(y), max.max(y))
-            });
-        let width = max_x - min_x;
-        let height = max_y - min_y;
+        let angle_step = std::f32::consts::PI * 2.0 / segments as f32;
+        let mut vertices = Vec::with_capacity(segments as usize);
+        let mut indices = Vec::with_capacity(segments as usize * 3);
 
-        // Normalize UVs
-        for vertex in vertices {
-            let uv = Vector2::new((vertex.x - min_x) / width, (vertex.y - min_y) / height);
+        for i in 0..segments {
+            let angle = angle_step * i as f32;
+            let x = center.x + radius * angle.cos();
+            let y = center.y + radius * angle.sin();
 
-            inner.vertices.push(Vertex::new(
-                Vector3::new(vertex.x, vertex.y, 0.0),
+            let u = uv.x + (uv.w - uv.x) * (angle.cos() * 0.5 + 0.5);
+            let v = uv.y + (uv.h - uv.y) * (angle.sin() * 0.5 + 0.5);
+
+            vertices.push(Vertex::new(
+                Vector3::new(x, y, 0.0),
                 color,
-                uv,
+                Vector2::new(u, v),
             ));
+
+            indices.push(i as u16);
         }
 
-        inner.indices.extend_from_slice(&indices);
+        triangle_fan_to_list_indices_ref(&mut indices);
+
+        if indices.is_empty() {
+            return;
+        }
+
+        inner.push_geometry(&vertices, &indices, true);
     }
 
     pub fn set_scissor(&mut self, scissor: RectF) {
@@ -503,13 +916,12 @@ impl DrawingContext {
     }
 
     pub fn set_texture(&mut self, texture: Option<&Texture>) {
-        self.set_texture_ex(texture, None, None);
+        self.set_texture_ex(texture, None);
     }
 
     pub fn set_texture_ex(
         &mut self,
         texture: Option<&Texture>,
-        blend: Option<TextureBlend>,
         sampler: Option<TextureSampler>,
     ) {
         let mut inner = self.inner.borrow_mut();
@@ -523,15 +935,64 @@ impl DrawingContext {
                     panic!("Texture must be created with TextureUsage::Sampler");
                 }
 
-                let blend = blend.unwrap_or(texture_ref.blend.clone());
-                let sampler = sampler.unwrap_or(texture_ref.sampler_info.clone());
+                let default_sampler = TextureSampler::DEFAULT;
+                let sampler = sampler.unwrap_or(default_sampler);
 
-                inner.texture = Some((texture.clone(), blend, sampler));
+                inner.texture = Some((texture.clone(), sampler));
             }
             None => {
                 inner.texture = None;
             }
         }
+    }
+
+    pub fn set_texture_uv(&mut self, texture_uv: Option<RectF>) {
+        let mut inner = self.inner.borrow_mut();
+
+        match texture_uv {
+            Some(uv) => {
+                inner.texture_uv = Some(uv);
+            }
+            None => {
+                inner.texture_uv = None;
+            }
+        }
+    }
+
+    pub fn set_texture_atlas(&mut self, atlas: Option<(&TextureAtlas, &str)>) {
+        self.set_texture_atlas_ex(atlas);
+    }
+
+    pub fn set_texture_atlas_ex(
+        &mut self,
+        atlas: Option<(&TextureAtlas, &str)>,
+    ) {
+        match atlas {
+            Some((atlas, id)) => {
+                let tex_coord = atlas.get_id(id);
+
+                #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+                if tex_coord.is_none() {
+                    panic!("Texture atlas does not contain the specified id: {}", id);
+                }
+
+                let (tex_coord, _) = tex_coord.unwrap();
+                let texture = atlas.get_texture();
+
+                let mut inner = self.inner.borrow_mut();
+
+                let default_sampler = TextureSampler::DEFAULT;
+                inner.texture_atlas_uv = Some(tex_coord);
+                inner.texture = Some((
+                    texture.clone(),
+                    default_sampler,
+                ));
+            }
+            None => {
+                self.inner.borrow_mut().texture_atlas_uv = None;
+                return;
+            }
+        };
     }
 
     pub fn set_shader(&mut self, shader: Option<&GraphicsShader>) {
@@ -582,69 +1043,6 @@ impl DrawingContext {
         }
     }
 
-    pub(crate) fn push_queue(inner: &mut RefMut<'_, DrawingContextInner>, index_count: u32) {
-        let mut push_new_queue = false;
-
-        if inner.current_queue.is_some() {
-            let ref_queue = inner.current_queue.as_ref().unwrap();
-
-            // Check if current queue has the same texture, if not push the queue
-            let texture_changed = match (&ref_queue.texture, &inner.texture) {
-                (None, None) => false,
-                (Some(_), None) | (None, Some(_)) => true,
-                (
-                    Some((old_texture, old_blend, old_sampler)),
-                    Some((new_texture, new_blend, new_sampler)),
-                ) => {
-                    old_texture != new_texture
-                        || old_blend != new_blend
-                        || old_sampler != new_sampler
-                }
-            };
-
-            if texture_changed {
-                push_new_queue = true;
-            }
-
-            // Check if current queue has the same scissor, if not push the queue
-            if ref_queue.scissors != inner.scissor {
-                push_new_queue = true;
-            }
-
-            // Check if current queue has the same viewport, if not push the queue
-            if ref_queue.viewport != inner.viewport {
-                push_new_queue = true;
-            }
-
-            // check if current queue has the same shader, if not push the queue
-            if ref_queue.shader != inner.shader {
-                push_new_queue = true;
-            }
-        } else {
-            push_new_queue = true;
-        }
-
-        // Figure a way to push queue with correct start, and count
-        if push_new_queue {
-            if let Some(queue) = inner.current_queue.take() {
-                inner.queue.push(queue);
-            }
-
-            inner.current_queue = Some(DrawingQueue {
-                texture: inner.texture.clone(),
-                shader: None,
-                scissors: inner.scissor.clone(),
-                viewport: inner.viewport.clone(),
-                start_index: inner.indices.len() as u32,
-                start_vertex: 0, // TODO: Fix this
-                count: index_count,
-            });
-        } else {
-            let queue = inner.current_queue.as_mut().unwrap();
-            queue.count += index_count;
-        }
-    }
-
     pub(crate) fn end(&mut self) {
         let mut inner = self.inner.borrow_mut();
 
@@ -665,106 +1063,104 @@ impl DrawingContext {
         let mut vertices = inner.vertices.drain(..).collect::<Vec<_>>();
         let indices = inner.indices.drain(..).collect::<Vec<_>>();
 
-        let graphics_inner = inner.pass.graphics.borrow_mut();
+        {
+            let swapchain_size = {
+                let renderpass_inner = inner.pass.inner.borrow_mut();
 
-        let swapchain_size = {
-            let renderpass_inner = inner.pass.inner.borrow_mut();
+                Vector2::new(
+                    renderpass_inner.surface_size.x as f32,
+                    renderpass_inner.surface_size.y as f32,
+                )
+            };
 
-            Vector2::new(
-                renderpass_inner.render_target_size.x as f32,
-                renderpass_inner.render_target_size.y as f32,
-            )
+            for vertex in vertices.iter_mut() {
+                vertex.position.x = vertex.position.x / swapchain_size.x * 2.0 - 1.0;
+                vertex.position.y = 1.0 - (vertex.position.y / swapchain_size.y * 2.0);
+            }
         };
 
-        for vertex in vertices.iter_mut() {
-            vertex.position.x = vertex.position.x / swapchain_size.x * 2.0 - 1.0;
-            vertex.position.y = 1.0 - (vertex.position.y / swapchain_size.y * 2.0);
-            vertex.color = vertex.color.into_srgb();
-        }
+        let (vertex_buffer, index_buffer) = {
+            let (mut vertex_buffer, mut index_buffer) = {
+                let graphics_inner = inner.pass.graphics.borrow_mut();
 
-        for queue in queues.iter_mut() {
-            if queue.texture.is_none() {
-                let default_texture = graphics_inner.drawing_default_texture.clone().unwrap();
+                let drawing_mut = graphics_inner.drawing_state
+                    .as_ref()
+                    .unwrap()
+                    .borrow_mut();
 
-                let inner = default_texture.inner.borrow();
+                let vertex_buffer = drawing_mut.vertex_buffer.clone();
+                let index_buffer = drawing_mut.index_buffer.clone();
 
-                let sampler = inner.sampler_info.clone();
-                let blend = inner.blend.clone();
+                (
+                    vertex_buffer,
+                    index_buffer,
+                )
+            };
 
-                drop(inner);
+            for queue in queues.iter_mut() {
+                let inner = inner.pass.graphics.borrow();
+                let drawing = inner.drawing_state.as_ref().unwrap().borrow();
 
-                queue.texture = Some((default_texture, blend, sampler));
+                if queue.texture.is_none() {
+                    let default_texture = drawing
+                        .texture
+                        .clone();
+
+                    let sampler = TextureSampler::DEFAULT;
+                    queue.texture = Some((default_texture, sampler));
+                }
+
+                if queue.shader.is_none() {
+                    let default_shader = drawing
+                        .shader
+                        .clone();
+
+                    queue.shader = Some(default_shader);
+                }
+            }
+            
+            let expected_vertex_size = (vertices.len() * std::mem::size_of::<Vertex>()) as u64;
+            let expected_index_size = (indices.len() * std::mem::size_of::<u16>()) as u64;
+
+            if vertex_buffer.size() < expected_vertex_size {
+                vertex_buffer.resize(expected_vertex_size)
+                    .expect("Failed to resize vertex buffer");
             }
 
-            if queue.shader.is_none() {
-                let default_shader = graphics_inner.drawing_default_shader.clone();
-
-                queue.shader = default_shader;
+            if index_buffer.size() < expected_index_size {
+                index_buffer.resize(expected_index_size)
+                    .expect("Failed to resize index buffer");
             }
-        }
 
-        let mut vertex_buffer = graphics_inner
-            .drawing_vertex_buffer
-            .as_ref()
-            .unwrap()
-            .clone();
+            {
+                let inner = inner.pass.inner.borrow();
+                let mut cmd = inner.cmd.borrow_mut();
 
-        let mut index_buffer = graphics_inner
-            .drawing_index_buffer
-            .as_ref()
-            .unwrap()
-            .clone();
+                vertex_buffer.internal_write_raw_cmd_ref(&vertices, &mut cmd);
+                index_buffer.internal_write_raw_cmd_ref(&indices, &mut cmd);
+            }
 
-        drop(graphics_inner);
-
-        // Resize vertex and index buffers if needed
-        if vertex_buffer.size() < (vertices.len() * std::mem::size_of::<Vertex>()) as u64 {
-            let new_size = (vertices.len() * std::mem::size_of::<Vertex>()) as u64;
-
-            vertex_buffer
-                .resize(new_size)
-                .expect("Failed to resize vertex buffer");
-        }
-
-        if index_buffer.size() < (indices.len() * std::mem::size_of::<u16>()) as u64 {
-            let new_size = (indices.len() * std::mem::size_of::<u16>()) as u64;
-
-            index_buffer
-                .resize(new_size)
-                .expect("Failed to resize index buffer");
-        }
-
-        {
-            let inner = inner.pass.inner.borrow();
-            let mut cmd = inner.cmd.borrow_mut();
-
-            vertex_buffer.internal_write_raw_cmd_ref(&vertices, &mut cmd);
-            index_buffer.internal_write_raw_cmd_ref(&indices, &mut cmd);
-        }
+            (vertex_buffer, index_buffer)
+        };
 
         for queue in queues {
-            inner.pass.set_scissor(queue.scissors);
-            inner.pass.set_viewport(queue.viewport, 0.0, 1.0);
+            let pass = &mut inner.pass;
 
-            let (texture, blend, sampler) = queue.texture.as_ref().unwrap();
+            pass.set_scissor(queue.scissors);
+            pass.set_viewport(queue.viewport, 0.0, 1.0);
 
-            inner.pass.set_shader(queue.shader.as_ref());
-            inner
-                .pass
+            let (texture, sampler) = queue.texture.as_ref().unwrap();
+
+            pass.set_shader(queue.shader.as_ref());
+            pass
                 .set_gpu_buffer(Some(&vertex_buffer), Some(&index_buffer));
 
-            inner.pass.set_blend(Some(&blend));
+            pass.set_attachment_texture(0, 0, Some(&texture));
+            pass.set_attachment_sampler(0, 1, Some(sampler));
 
-            inner.pass.set_attachment_texture(0, 0, Some(&texture));
-            inner.pass.set_attachment_sampler(0, 1, Some(sampler));
-
-            inner
-                .pass
+            pass
                 .draw_indexed(queue.start_index..queue.count, queue.start_vertex as i32, 1);
         }
-
-        inner.vertices.clear();
-        inner.indices.clear();
     }
 }
 
@@ -778,6 +1174,7 @@ impl Drop for DrawingContext {
     }
 }
 
+// Memory optimization purpose.
 thread_local! {
     static INDICES_VEC: RefCell<Vec<u16>> = RefCell::new(Vec::new());
 }
@@ -806,6 +1203,7 @@ fn triangle_fan_to_list_indices_ref(param: &mut Vec<u16>) {
     });
 }
 
+/// Quick and dirty way to clear a vector without dropping its elements.
 fn vec_clear<T>(vec: &mut Vec<T>) {
     // SAFETY: Only used for clearing the vector of plain struct
     // no references or pointers to heap-allocated data

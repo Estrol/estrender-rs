@@ -2,162 +2,29 @@ use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use wgpu::{ColorWrites, CommandEncoder, ShaderStages};
+use wgpu::{ColorWrites, CommandEncoder};
 
 #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
 use crate::gpu::BufferUsage;
-use crate::gpu::{GraphicsPipelineDesc, gpu_inner::GPUInner};
-#[rustfmt::skip]
 use crate::{
     gpu::{
-        buffer::Buffer,
-        shader::{
-            GraphicsShader,
-            IndexBufferSize,
-            ShaderBindingType,
-            ShaderCullMode,
-            ShaderFrontFace,
-            ShaderPollygonMode,
-            ShaderTopology,
-        },
-        texture::{
-            SampleCount,
-            Texture,
-            TextureBlend,
-            TextureSampler,
-            TextureUsage,
-        },
-        BindGroupCreateInfo,
-        BindGroupLayout,
-        RenderPipeline,
-        ShaderType,
-        VertexAttributeLayout,
+        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, DrawCallType,
+        DrawingContext, GraphicsPipelineDesc, GraphicsShader, IndexBufferSize,
+        IntermediateRenderPipeline, RenderPassQueue, RenderPipeline, RenderShaderBinding,
+        SampleCount, ShaderBindingType, ShaderCullMode, ShaderFrontFace, ShaderPollygonMode,
+        ShaderReflect, ShaderTopology, ShaderType, Texture, TextureBlend, TextureSampler,
+        TextureUsage, VertexAttributeLayout, gpu_inner::GPUInner,
+        renderpass_inner::RenderPassInner,
     },
-    math::{self, Color, Point2, RectF},
-    prelude::ShaderReflect,
+    math::{Color, Point2, RectF},
     utils::ArcRef,
 };
-
-use super::{BindGroupAttachment, drawing::DrawingContext};
-
-#[derive(Clone, Debug, Hash)]
-pub(crate) struct IntermediateRenderPipeline {
-    pub shader: (wgpu::ShaderModule, wgpu::ShaderModule),
-    pub vertex_attribute: (u64, Vec<wgpu::VertexAttribute>),
-    pub shader_entry: (String, String),
-    pub layout: Vec<BindGroupLayout>,
-    pub topology: ShaderTopology,
-    pub cull_mode: Option<ShaderCullMode>,
-    pub front_face: ShaderFrontFace,
-    pub polygon_mode: ShaderPollygonMode,
-    pub index_format: Option<IndexBufferSize>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum RenderShaderBinding {
-    Intermediate(IntermediateRenderPipeline),
-    Pipeline(RenderPipeline),
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub enum BindGroupType {
-    Uniform(wgpu::Buffer),
-    Texture(wgpu::TextureView),
-    TextureStorage(wgpu::TextureView),
-    Sampler(wgpu::Sampler),
-    Storage(wgpu::Buffer),
-}
-
-impl std::fmt::Display for BindGroupType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BindGroupType::Uniform(_) => write!(f, "Uniform"),
-            BindGroupType::Texture(_) => write!(f, "Texture"),
-            BindGroupType::TextureStorage(_) => write!(f, "TextureStorage"),
-            BindGroupType::Sampler(_) => write!(f, "Sampler"),
-            BindGroupType::Storage(_) => write!(f, "Storage"),
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub enum Attachment<'a> {
-    Texture(&'a Texture, &'a TextureBlend),
-    Sampler(&'a TextureSampler),
-    Buffer(&'a Buffer),
-    Storage(&'a Buffer),
-}
-
-pub trait IntoOptionAttachment<'a> {
-    fn into_option_attachment(self) -> Option<Attachment<'a>>;
-}
-
-#[derive(Debug, Clone)]
-pub enum DrawCallType {
-    Direct {
-        ranges: Range<u32>,
-        vertex_offset: i32,
-        num_of_instances: u32,
-    },
-
-    InDirect {
-        buffer: wgpu::Buffer,
-        offset: u64,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderPassQueue {
-    pub pipeline: wgpu::RenderPipeline,
-    pub bind_group: Vec<(u32, wgpu::BindGroup)>,
-
-    pub vbo: Option<wgpu::Buffer>,
-    pub ibo: Option<wgpu::Buffer>,
-    pub itype: Option<wgpu::IndexFormat>,
-
-    pub viewport: Option<(RectF, f32, f32)>,
-    pub scissor: Option<RectF>,
-
-    pub ty: DrawCallType,
-    pub push_constant: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderPassInner {
-    pub cmd: ArcRef<CommandEncoder>,
-
-    pub render_target: wgpu::TextureView,
-    pub render_target_format: wgpu::TextureFormat,
-    pub render_target_size: Point2,
-
-    pub depth_target: Option<wgpu::TextureView>,
-    pub depth_target_format: Option<wgpu::TextureFormat>,
-
-    pub multi_sample_target: Option<wgpu::TextureView>,
-    pub multi_sample_count: Option<u32>,
-
-    pub clear_color: Option<Color>,
-    pub blend: Option<wgpu::BlendState>,
-    pub color_write_mask: Option<wgpu::ColorWrites>,
-    pub viewport: Option<(RectF, f32, f32)>,
-    pub scissor: Option<RectF>,
-
-    pub vertex: Option<wgpu::Buffer>,
-    pub index: Option<wgpu::Buffer>,
-
-    pub shader: Option<RenderShaderBinding>,
-    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-    pub shader_reflection: Option<Vec<ShaderReflect>>,
-
-    pub attachments: Vec<BindGroupAttachment>,
-    pub push_constant: Option<Vec<u8>>,
-
-    pub queues: Vec<RenderPassQueue>,
-}
-
 /// Represents a render pass in the graphics pipeline.
 ///
 /// Renderpass support intermediate mode which includes setting up shaders, buffers, and attachments.
@@ -201,25 +68,21 @@ impl RenderPass {
     pub(crate) fn new(
         graphics: ArcRef<GPUInner>,
         cmd: ArcRef<CommandEncoder>,
-        render_target: wgpu::TextureView,
-        render_target_format: wgpu::TextureFormat,
-        render_target_size: Point2,
+        atomic_pass: Arc<AtomicBool>,
     ) -> Self {
         let inner = RenderPassInner {
             cmd,
-            render_target,
-            render_target_format,
-            render_target_size,
+            atomic_pass,
 
+            render_targets: Vec::new(),
             depth_target: None,
             depth_target_format: None,
+            surface_size: Point2::new(0.0, 0.0),
 
             multi_sample_count: None,
-            multi_sample_target: None,
+            multi_sample_target: Vec::new(),
 
             clear_color: None,
-            blend: None,
-            color_write_mask: Some(ColorWrites::COLOR),
             viewport: None,
             scissor: None,
 
@@ -255,33 +118,38 @@ impl RenderPass {
     }
 
     #[inline]
-    pub fn set_blend(&mut self, blend: Option<&TextureBlend>) {
+    pub fn set_blend(&mut self, index: usize, blend: Option<&TextureBlend>) {
         let mut inner = self.inner.borrow_mut();
 
-        match blend {
-            Some(blend) => {
-                inner.blend = Some(blend.clone().into());
-                inner.color_write_mask = Some(blend.clone().into());
+        match inner.render_targets.get_mut(index) {
+            Some(target) => {
+                if let Some(blend) = blend {
+                    target.blend = Some(blend.create_wgpu_blend_state());
+                    target.write_mask = Some(blend.create_wgpu_color_write_mask());
+                } else {
+                    target.blend = None;
+                    target.write_mask = Some(ColorWrites::COLOR);
+                }
             }
             None => {
-                inner.blend = None;
-                inner.color_write_mask = None;
+                panic!("Render target at index {} does not exist", index);
             }
         }
     }
 
     #[inline]
-    pub fn get_blend(&self) -> Option<TextureBlend> {
+    pub fn get_blend(&self, index: usize) -> Option<TextureBlend> {
         let inner = self.inner.borrow();
 
-        if inner.blend.is_none() && inner.color_write_mask.is_none() {
-            return None;
-        }
+        match inner.render_targets.get(index) {
+            Some(target) => {
+                let state = target.blend.clone();
+                let color_write_mask = target.write_mask.clone();
 
-        Some(TextureBlend::from_wgpu(
-            inner.blend.clone(),
-            inner.color_write_mask.clone(),
-        ))
+                Some(TextureBlend::from_wgpu(state, color_write_mask))
+            }
+            None => None,
+        }
     }
 
     #[inline]
@@ -507,6 +375,8 @@ impl RenderPass {
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
+            use crate::gpu::ShaderBindingType;
+
             if inner.shader.is_none() {
                 panic!("Shader is not set");
             }
@@ -626,39 +496,25 @@ impl RenderPass {
     }
 
     #[inline]
-    pub fn set_multi_sample_texture(&mut self, texture: Option<&Texture>) {
+    pub fn push_msaa_texture(&mut self, texture: &Texture) {
         let mut inner = self.inner.borrow_mut();
 
-        if texture.is_none() {
-            inner.multi_sample_target = None;
-            inner.multi_sample_count = None;
-
-            return;
+        if inner.multi_sample_count.is_none() {
+            inner.multi_sample_count = Some(texture.inner.borrow().sample_count.into());
         }
 
-        let texture = texture.unwrap();
-        let texture_inner = texture.inner.borrow();
-
+        // check msaa count
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            if texture_inner.sample_count == SampleCount::SampleCount1 {
-                panic!("Texture must be multi sampled above 1x");
-            }
-
-            let msaa_size = texture_inner.size;
-            if msaa_size.w == 0 || msaa_size.h == 0 {
-                panic!("Multi sample texture size must be greater than 0");
-            }
-
-            if msaa_size.w != inner.render_target_size.x
-                || msaa_size.h != inner.render_target_size.y
-            {
-                panic!("Multi sample texture size must match render target size");
+            let msaa_count = texture.inner.borrow().sample_count.into();
+            if inner.multi_sample_count.unwrap() != msaa_count {
+                panic!("Multi sample texture count must match render target count");
             }
         }
 
-        inner.multi_sample_target = Some(texture_inner.wgpu_view.clone());
-        inner.multi_sample_count = Some(texture_inner.sample_count.into());
+        inner
+            .multi_sample_target
+            .push(texture.inner.borrow().wgpu_view.clone());
     }
 
     #[inline]
@@ -694,12 +550,11 @@ impl RenderPass {
                     }
 
                     let depth_size = texture_inner.size;
-                    if depth_size.w == 0 || depth_size.h == 0 {
+                    if depth_size.x == 0 || depth_size.y == 0 {
                         panic!("Depth texture size must be greater than 0");
                     }
 
-                    if depth_size.w != inner.render_target_size.x
-                        || depth_size.h != inner.render_target_size.y
+                    if depth_size.x != inner.surface_size.x || depth_size.y != inner.surface_size.y
                     {
                         panic!("Depth texture size must match render target size");
                     }
@@ -1123,11 +978,14 @@ impl RenderPass {
                     let mut hasher = DefaultHasher::new();
                     shader_binding.hash(&mut hasher);
 
-                    inner.render_target_format.hash(&mut hasher);
+                    for target in &inner.render_targets {
+                        target.format.hash(&mut hasher);
+                        target.blend.hash(&mut hasher);
+                        target.write_mask.hash(&mut hasher);
+                    }
+
                     inner.depth_target_format.hash(&mut hasher);
                     inner.multi_sample_count.hash(&mut hasher);
-                    inner.blend.hash(&mut hasher);
-                    inner.color_write_mask.hash(&mut hasher);
 
                     hasher.finish()
                 };
@@ -1160,18 +1018,24 @@ impl RenderPass {
                                 .map(|l| l.layout.clone())
                                 .collect::<Vec<_>>();
 
-                            let pipeline_desc = GraphicsPipelineDesc {
+                            let mut pipeline_desc = GraphicsPipelineDesc {
                                 shaders: shader_binding.shader.clone(),
                                 entry_point: shader_binding.shader_entry.clone(),
-                                render_target: inner.render_target_format,
+                                render_target: Vec::with_capacity(inner.render_targets.len()),
                                 depth_stencil: inner.depth_target_format,
-                                blend_state: inner.blend.clone(),
-                                write_mask: inner.color_write_mask.clone(),
                                 vertex_desc,
                                 primitive_state,
                                 bind_group_layout: layout,
                                 msaa_count: inner.multi_sample_count.unwrap_or(1),
                             };
+
+                            for target in &inner.render_targets {
+                                pipeline_desc.render_target.push((
+                                    target.format,
+                                    target.blend,
+                                    target.write_mask,
+                                ));
+                            }
 
                             graphics_inner
                                 .create_graphics_pipeline(pipeline_hash_key, pipeline_desc)
@@ -1187,7 +1051,15 @@ impl RenderPass {
             }
             Some(RenderShaderBinding::Pipeline(pipeline)) => {
                 let mut pipeline_desc = pipeline.pipeline_desc.clone();
-                pipeline_desc.render_target = inner.render_target_format;
+
+                for target in &inner.render_targets {
+                    pipeline_desc.render_target.push((
+                        target.format,
+                        target.blend,
+                        target.write_mask,
+                    ));
+                }
+
                 pipeline_desc.depth_stencil = inner.depth_target_format;
                 pipeline_desc.msaa_count = inner.multi_sample_count.unwrap_or(1);
 
@@ -1195,7 +1067,12 @@ impl RenderPass {
                     let mut hasher = DefaultHasher::new();
                     pipeline_desc.hash(&mut hasher);
 
-                    inner.render_target_format.hash(&mut hasher);
+                    for target in &inner.render_targets {
+                        target.format.hash(&mut hasher);
+                        target.blend.hash(&mut hasher);
+                        target.write_mask.hash(&mut hasher);
+                    }
+
                     inner.depth_target_format.hash(&mut hasher);
                     inner.multi_sample_count.hash(&mut hasher);
 
@@ -1231,8 +1108,7 @@ impl RenderPass {
         let inner = self.inner.borrow_mut();
         let mut cmd = inner.cmd.borrow_mut();
 
-        let mut clear_color = inner.clear_color.unwrap_or(Color::BLACK);
-        math::rgb_to_srgb(&mut clear_color);
+        let clear_color = inner.clear_color.unwrap_or(Color::BLACK);
 
         let load_op = if clear_color.a <= 0.0 {
             wgpu::LoadOp::Load
@@ -1245,18 +1121,37 @@ impl RenderPass {
             })
         };
 
-        let mut color_attachment = wgpu::RenderPassColorAttachment {
-            view: &inner.render_target,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: load_op,
-                store: wgpu::StoreOp::Store,
-            },
-        };
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        {
+            if inner.multi_sample_count.is_some()
+                && inner.multi_sample_target.len() != inner.render_targets.len()
+            {
+                panic!("Multi sample target must match the number of render targets");
+            }
+        }
 
-        if let Some(msaa_resolve_target) = inner.multi_sample_target.as_ref() {
-            color_attachment.resolve_target = Some(color_attachment.view);
-            color_attachment.view = msaa_resolve_target;
+        let mut color_attachments = Vec::with_capacity(inner.render_targets.len());
+        let has_msaa = inner.multi_sample_count.is_some();
+
+        for i in 0..inner.render_targets.len() {
+            let target_view = if has_msaa {
+                &inner.multi_sample_target[i]
+            } else {
+                &inner.render_targets[i].view
+            };
+
+            color_attachments.push(Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: if has_msaa {
+                    Some(&inner.render_targets[i].view)
+                } else {
+                    None
+                },
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            }));
         }
 
         let mut depth_stencil_attachment = None;
@@ -1273,7 +1168,7 @@ impl RenderPass {
 
         let mut render_pass = cmd.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
-            color_attachments: &[Some(color_attachment)],
+            color_attachments: color_attachments.as_slice(),
             depth_stencil_attachment,
             ..Default::default()
         });
@@ -1291,6 +1186,8 @@ impl RenderPass {
 
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(pc) = &queue.push_constant {
+                use wgpu::ShaderStages;
+
                 render_pass.set_push_constants(ShaderStages::all(), 0, pc);
             }
 
@@ -1346,6 +1243,8 @@ impl RenderPass {
                 }
             }
         }
+
+        inner.atomic_pass.store(false, Ordering::Relaxed);
     }
 }
 

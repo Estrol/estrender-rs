@@ -15,9 +15,9 @@ fn main() {
 
     let mut msaa_texture = Some(
         gpu.create_texture()
-            .with_render_target(Rect::new(0, 0, 800, 600), None)
-            .with_usage(TextureUsage::Sampler)
-            .with_sample_count(SampleCount::SampleCount4)
+            .set_render_target(Point2::new(800, 600), None)
+            .set_usage(TextureUsage::Sampler)
+            .set_sample_count(SampleCount::SampleCount4)
             .build()
             .expect("Failed to create MSAA texture"),
     );
@@ -63,12 +63,12 @@ fn main() {
                         } else {
                             msaa_texture = Some(
                                 gpu.create_texture()
-                                    .with_render_target(
-                                        Rect::new(0, 0, window_size.x, window_size.y),
+                                    .set_render_target(
+                                        Point2::new(window_size.x, window_size.y),
                                         None,
                                     )
-                                    .with_usage(TextureUsage::Sampler)
-                                    .with_sample_count(msaa_count)
+                                    .set_usage(TextureUsage::Sampler)
+                                    .set_sample_count(msaa_count)
                                     .build()
                                     .expect("Failed to recreate MSAA texture"),
                             );
@@ -86,9 +86,9 @@ fn main() {
                     // Resize the MSAA texture to match the new window size
                     msaa_texture = Some(
                         gpu.create_texture()
-                            .with_render_target(Rect::new(0, 0, size.x, size.y), None)
-                            .with_usage(TextureUsage::Sampler)
-                            .with_sample_count(msaa_count)
+                            .set_render_target(Point2::new(size.x, size.y), None)
+                            .set_usage(TextureUsage::Sampler)
+                            .set_sample_count(msaa_count)
                             .build()
                             .expect("Failed to resize MSAA texture"),
                     );
@@ -97,10 +97,12 @@ fn main() {
             }
         }
 
-        if let Some(mut cmd) = gpu.begin_command() {
-            if let Some(mut rp) = cmd.begin_renderpass() {
+        if let Ok(mut cmd) = gpu.begin_command() {
+            if let Ok(mut rp) = cmd.begin_renderpass() {
                 rp.set_clear_color(Color::BLACK);
-                rp.set_multi_sample_texture(msaa_texture.as_ref());
+                if let Some(texture) = msaa_texture.as_ref() {
+                    rp.push_msaa_texture(texture);
+                }
 
                 if let Some(mut drawing) = rp.begin_drawing() {
                     let pos1 = Vector2::new(0.0, 0.0);
@@ -108,7 +110,7 @@ fn main() {
                     let pos3 = Vector2::new(400.0, 600.0);
 
                     // Draw a full triangle covering the window
-                    drawing.triangle_filled(pos1, pos2, pos3, Color::BLUE);
+                    drawing.draw_triangle_filled(pos1, pos2, pos3, Color::BLUE);
                 }
             }
         }

@@ -21,10 +21,12 @@ pub(crate) struct VertexAttributeLayout {
 pub(crate) struct GraphicsPipelineDesc {
     pub shaders: (wgpu::ShaderModule, wgpu::ShaderModule),
     pub entry_point: (String, String),
-    pub render_target: wgpu::TextureFormat,
+    pub render_target: Vec<(
+        wgpu::TextureFormat,
+        Option<wgpu::BlendState>,
+        Option<wgpu::ColorWrites>,
+    )>,
     pub depth_stencil: Option<wgpu::TextureFormat>,
-    pub blend_state: Option<wgpu::BlendState>,
-    pub write_mask: Option<wgpu::ColorWrites>,
     pub vertex_desc: VertexAttributeLayout,
     pub primitive_state: wgpu::PrimitiveState,
     pub bind_group_layout: Vec<wgpu::BindGroupLayout>,
@@ -81,13 +83,16 @@ impl PipelineManager {
             });
         }
 
-        let color_target = Some(wgpu::ColorTargetState {
-            format: desc.render_target,
-            blend: desc.blend_state,
-            write_mask: desc.write_mask.unwrap_or(wgpu::ColorWrites::empty()),
-        });
+        let mut bindings = Vec::with_capacity(desc.render_target.len());
+        for (format, blend, write_mask) in desc.render_target {
+            let write_mask = write_mask.unwrap_or(wgpu::ColorWrites::ALL);
 
-        let binding = [color_target];
+            bindings.push(Some(wgpu::ColorTargetState {
+                format,
+                blend,
+                write_mask,
+            }));
+        }
 
         let label = format!("RenderPipeline {}", key);
 
@@ -109,7 +114,7 @@ impl PipelineManager {
             fragment: Some(wgpu::FragmentState {
                 module: &desc.shaders.1,
                 entry_point: Some(desc.entry_point.1.as_str()),
-                targets: &binding,
+                targets: bindings.as_slice(),
                 compilation_options: Default::default(),
             }),
             primitive: desc.primitive_state,

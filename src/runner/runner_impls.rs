@@ -24,9 +24,11 @@ use winit::platform::x11::EventLoopBuilderExtX11;
 use crate::{
     math::{Point2, Timing},
     runner::{
-        named_key_to_str, runner_inner::Handle, Event, MouseScrollDelta, PollMode, WindowEvent
+        Event, MouseScrollDelta, PollMode, RunnerError, WindowEvent, named_key_to_str,
+        runner_inner::Handle,
     },
-    utils::{ArcMut, ArcRef}, window::{window_inner::WindowInner, WindowBuilder},
+    utils::{ArcMut, ArcRef},
+    window::{WindowBuilder, window_inner::WindowInner},
 };
 
 // This is the most laziest workaround to able construct multiple event loops
@@ -68,13 +70,13 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub(crate) fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, RunnerError> {
         let thread_id = std::thread::current().id();
 
         if CURRENT_LOOP_THREAD_ID.lock().unwrap().is_none() {
             *CURRENT_LOOP_THREAD_ID.lock().unwrap() = Some(thread_id);
         } else if CURRENT_LOOP_THREAD_ID.lock().unwrap().as_ref() != Some(&thread_id) {
-            return Err("Event loop can only be created in the last caller thread.".to_string());
+            return Err(RunnerError::ThreadMissmatch);
         }
 
         let event_loop = if let Some(current_loop) = CURRENT_LOOP.lock().unwrap().as_ref() {
@@ -88,18 +90,22 @@ impl Runner {
                     event_loop_builder.with_any_thread(true);
                 }
 
-                event_loop_builder
-                    .build()
-                    .expect("Failed to create EventLoop")
+                event_loop_builder.build()
             });
 
+            // Winit panic if the event loop is already created in another? thread.
             if event_loop_result.is_err() {
                 *CURRENT_LOOP_THREAD_ID.lock().unwrap() = None;
 
-                return Err(format!(
-                    "Failed to create EventLoop: {:?}",
-                    event_loop_result.err()
-                ));
+                return Err(RunnerError::WinitEventLoopPanic);
+            }
+
+            // If the event loop creation failed, we return an error.
+            let event_loop_result = event_loop_result.unwrap();
+            if event_loop_result.is_err() {
+                *CURRENT_LOOP_THREAD_ID.lock().unwrap() = None;
+
+                return Err(RunnerError::WinitEventLoopFailed);
             }
 
             let event_loop_result = ArcRef::new(event_loop_result.unwrap());
@@ -142,13 +148,14 @@ impl Runner {
         title: String,
         size: Point2,
         pos: Option<Point2>,
-    ) -> Result<(usize, EventLoopProxy<WindowEvent>), String> {
+    ) -> Result<(usize, EventLoopProxy<WindowEvent>), RunnerError> {
         let mut event_loop = self.event_loop.wait_borrow_mut();
         let event_loop_proxy = event_loop.create_proxy();
 
         let window_id = CURRENT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if window_id >= 1000 {
-            return Err("Maximum window reached!".to_string());
+            // return Err("Maximum window reached!".to_string());
+            return Err(RunnerError::MaximumWindowReached);
         }
 
         let res = event_loop_proxy.send_event(WindowEvent::Create {
@@ -160,11 +167,13 @@ impl Runner {
         });
 
         if res.is_err() {
-            return Err(self
+            let err = self
                 .app_runner
                 .last_error
                 .clone()
-                .unwrap_or_else(|| "Failed to create window!".to_string()));
+                .unwrap_or_else(|| "Failed to create window!".to_string());
+
+            return Err(RunnerError::FailedToCreateWindow(err));
         }
 
         event_loop.pump_app_events(Some(Duration::ZERO), &mut self.app_runner);
@@ -178,11 +187,13 @@ impl Runner {
         }
 
         if !found {
-            return Err(self
+            let err = self
                 .app_runner
                 .last_error
                 .clone()
-                .unwrap_or_else(|| "Failed to create window!".to_string()));
+                .unwrap_or_else(|| "Failed to create window!".to_string());
+
+            return Err(RunnerError::FailedToCreateWindow(err));
         }
 
         Ok((window_id, event_loop_proxy))
@@ -383,9 +394,9 @@ impl Runner {
                         }
                     }
                 }
-                PumpStatus::Exit(code) => {
+                PumpStatus::Exit(_code) => {
                     // Exit the event loop
-                    crate::dbg_log!("Event loop exited with code: {}", code);
+                    crate::dbg_log!("Event loop exited with code: {}", _code);
 
                     return false;
                 }

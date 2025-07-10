@@ -71,19 +71,19 @@ fn main() {
 
     let mut msaa_texture = gpu
         .create_texture()
-        .with_render_target(Rect::with_size(800, 600), None)
-        .with_sample_count(SampleCount::SampleCount4)
+        .set_render_target(Point2::new(800, 600), None)
+        .set_sample_count(SampleCount::SampleCount4)
         .build()
         .expect("Failed to create MSAA texture");
 
     let blank_texture = gpu
         .create_texture()
-        .with_raw(
+        .set_raw_image(
             &[255u8; 4],
-            Rect::with_size(1, 1),
+            Point2::new(1, 1),
             TextureFormat::Bgra8Unorm,
         )
-        .with_usage(TextureUsage::Sampler)
+        .set_usage(TextureUsage::Sampler)
         .build()
         .expect("Failed to create blank texture");
 
@@ -169,21 +169,21 @@ fn main() {
 
                     msaa_texture = gpu
                         .create_texture()
-                        .with_render_target(Rect::new(0, 0, size.x as u32, size.y as u32), None)
-                        .with_sample_count(SampleCount::SampleCount4)
+                        .set_render_target(Point2::new(size.x as u32, size.y as u32), None)
+                        .set_sample_count(SampleCount::SampleCount4)
                         .build()
                         .expect("Failed to resize MSAA texture");
                 }
                 Event::RedrawRequested { window_id: _ } => {
-                    if let Some(mut cmd) = gpu.begin_command() {
-                        if let Some(mut cm) = cmd.begin_computepass() {
+                    if let Ok(mut cmd) = gpu.begin_command() {
+                        if let Ok(mut cm) = cmd.begin_computepass() {
                             cm.set_pipeline(Some(&compute_pipeline));
                             cm.dispatch(1, 1, 1);
                         }
 
-                        if let Some(mut rp) = cmd.begin_renderpass() {
+                        if let Ok(mut rp) = cmd.begin_renderpass() {
                             rp.set_clear_color(Color::BLACK);
-                            rp.set_multi_sample_texture(Some(&msaa_texture));
+                            rp.push_msaa_texture(&msaa_texture);
 
                             rp.set_pipeline(Some(&pipeline));
                             rp.set_gpu_buffer(Some(&vbo), Some(&ibo));

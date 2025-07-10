@@ -24,9 +24,19 @@ fn main() {
             }
         }
 
-        if let Some(mut cmd) = gpu.begin_command() {
-            if let Some(mut gp) = cmd.begin_renderpass() {
-                gp.set_clear_color(Color::BLUE); // Set the clear color to blue
+        if let Ok(mut cmd) = gpu.begin_command() {
+            let surface = cmd.get_surface_texture();
+            if surface.is_err() {
+                println!("Failed to get surface texture: {:?}", surface.err());
+                continue;
+            }
+
+            // Or you could use `cmd.begin_renderpass()` directly
+            if let Ok(mut rp) = cmd.renderpass_builder()
+                .add_surface_color_attachment(surface.as_ref().unwrap(), Some(&TextureBlend::ALPHA_BLEND))
+                .build() 
+            {
+                rp.set_clear_color(Color::BLUE);
             }
         }
     }

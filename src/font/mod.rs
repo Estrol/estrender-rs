@@ -6,11 +6,13 @@ use std::{
 
 use byteorder_lite::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use flate2::bufread::ZlibDecoder;
-// use gpu::GPUFont;
 
-use crate::{math::Vector2, utils::ArcRef};
+use crate::{
+    gpu::{gpu_inner::GPUInner, Texture, TextureBuilder, TextureError, TextureFormat, TextureUsage, GPU},
+    math::{Point2, Vector2},
+    utils::ArcRef,
+};
 
-// mod gpu;
 mod system;
 
 #[derive(Clone, Copy, Debug)]
@@ -32,6 +34,7 @@ pub struct FontInfo {
     pub style: FontStyle,
 }
 
+#[derive(Clone, Debug)]
 pub struct FontInner {
     pub info: FontInfo,
     pub glyphs: HashMap<u32, Glyph>,
@@ -41,9 +44,10 @@ pub struct FontInner {
     pub ascender: f32,
     pub descender: f32,
     pub line_height: f32,
+    pub space_width: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Font {
     pub(crate) inner: ArcRef<FontInner>,
 }
@@ -77,6 +81,7 @@ impl Font {
             .expect("Failed to parse font file");
 
         let line_metrics = font.horizontal_line_metrics(size);
+        let pixel_gap = 2usize; // Add a pixel gap to avoid artifacts
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         if line_metrics.is_none() {
@@ -91,11 +96,43 @@ impl Font {
         let ascender = line_metrics.ascent;
         let descender = line_metrics.descent;
         let line_height = line_metrics.ascent - line_metrics.descent + line_metrics.line_gap;
+        let space_metrics = font.metrics(' ', size);
 
-        let mut total_area = 0;
-        let mut max_glyph_width = 0;
-        let mut max_glyph_height = 0;
-        let mut raw_glyph = Vec::new();
+        // Calculate texture estimated width based on glyph range
+        // to avoid very WIDE font atlas
+        let tex_width = {
+            let mut total_area = 0;
+            
+            for &(start, end) in glyph_range {
+                for codepoint in start..=end {
+                    let codepoint_char = std::char::from_u32(codepoint).unwrap_or_default();
+                    let metrics = font.metrics(codepoint_char, size);
+
+                    total_area += ((metrics.width + pixel_gap) * (metrics.height + pixel_gap)) as usize;
+                }
+            }
+
+            power_of_two((total_area as f32).sqrt().ceil() as usize) as i32
+        };
+
+        if tex_width > MAX_ATLAS_SIZE as i32 {
+            panic!(
+                "Calculated texture area {} exceeds maximum atlas size {}",
+                tex_width, MAX_ATLAS_SIZE
+            );
+        }
+
+        let rect_config = rect_packer::Config {
+            width: tex_width,
+            height: tex_width,
+            border_padding: 0,
+            rectangle_padding: pixel_gap as i32,
+        };
+
+        let mut packer = rect_packer::Packer::new(rect_config);
+        let mut raw_glyphs = Vec::new();
+        let mut max_size = Point2::new(0, 0);
+
         for &(start, end) in glyph_range {
             for codepoint in start..=end {
                 let codepoint_char = std::char::from_u32(codepoint).unwrap_or_default();
@@ -104,68 +141,53 @@ impl Font {
                     continue;
                 }
 
-                total_area += (metrics.width * metrics.height) as u32;
-                max_glyph_width = max_glyph_width.max(metrics.width);
-                max_glyph_height = max_glyph_height.max(metrics.height);
+                if let Some(rect) = packer.pack(metrics.width as i32, metrics.height as i32, false) {
+                    raw_glyphs.push(
+                        (rect, codepoint, metrics, bitmap)
+                    );
 
-                raw_glyph.push((codepoint, metrics, bitmap));
+                    max_size.x = max_size.x.max(rect.x + rect.width);
+                    max_size.y = max_size.y.max(rect.y + rect.height);
+                } else {
+                    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+                    panic!(
+                        "Failed to pack glyph: {} ({}x{}) with atlas size {}x{}",
+                        codepoint_char,
+                        metrics.width,
+                        metrics.height,
+                        tex_width,
+                        tex_width
+                    );
+                }
             }
         }
 
-        let estimated_side = (total_area as f32).sqrt().ceil() as usize;
-        let atlas_width = power_of_two(estimated_side);
-        let atlas_height = power_of_two(estimated_side);
-
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if atlas_width > MAX_ATLAS_SIZE || atlas_height > MAX_ATLAS_SIZE {
-            panic!(
-                "Font texture atlas is too large: {}x{} (max: {}x{})",
-                atlas_width, atlas_height, MAX_ATLAS_SIZE, MAX_ATLAS_SIZE
-            );
-        }
-
-        let mut x = 0;
-        let mut y = 0;
-        let mut row_height = 0;
-
-        let mut texture_buffer = vec![0; atlas_width * atlas_height];
+        let mut texture_buffer = vec![0; (max_size.x * max_size.y) as usize];
         let mut glyphs = HashMap::new();
 
-        for (codepoint, metrics, bitmap) in raw_glyph {
-            let advance = metrics.width as f32;
-
+        for (rect, codepoint, metrics, bitmap) in raw_glyphs {
+            let advance = metrics.advance_width as f32;
             let glyph_width = metrics.width as usize;
             let glyph_height = metrics.height as usize;
 
-            if x + glyph_width > atlas_width {
-                x = 0;
-                y += row_height;
-                row_height = 0;
+            for j in 0..glyph_height {
+                for i in 0..glyph_width {
+                    let src_index = j * glyph_width + i;
+                    let dest_x = rect.x as usize + i;
+                    let dest_y = rect.y as usize + j;
+                    let dest_index = dest_y * max_size.x as usize + dest_x;
+
+                    if dest_index < texture_buffer.len() && src_index < bitmap.len() {
+                        texture_buffer[dest_index] = bitmap[src_index];
+                    }
+                }
             }
 
-            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-            if y + glyph_height > atlas_height {
-                // panic!("Font texture atlas is too small, try reducing the number of glyphs.");
-                panic!(
-                    "Font texture atlas is too small: {}x{} (max: {}x{}), trying to fit glyph: {} at ({}, {})",
-                    atlas_width, atlas_height, MAX_ATLAS_SIZE, MAX_ATLAS_SIZE, codepoint, x, y
-                );
-            }
-
-            for row in 0..glyph_height {
-                let dest_start = (x + (y + row) * atlas_width) as usize;
-                let src_start = row * glyph_width;
-                let src_end = src_start + glyph_width;
-                texture_buffer[dest_start..dest_start + glyph_width]
-                    .copy_from_slice(&bitmap[src_start..src_end]);
-            }
-
-            if glyph_height > row_height {
-                row_height = glyph_height;
-            }
-
-            let start_offset = Vector2::new(x as f32, y as f32);
-            let end_offset = Vector2::new((x + glyph_width) as f32, (y + glyph_height) as f32);
+            let start_offset = Vector2::new(rect.x as f32, rect.y as f32);
+            let end_offset = Vector2::new(
+                rect.x + glyph_width as i32,
+                rect.y + glyph_height as i32,
+            );
 
             let glyph = Glyph {
                 codepoint,
@@ -184,30 +206,84 @@ impl Font {
             };
 
             glyphs.insert(codepoint, glyph);
-
-            x += glyph_width;
         }
 
         let inner = FontInner {
             info,
             glyphs,
             texture_buffer,
-            texture_width: atlas_width as u32,
-            texture_height: atlas_height as u32,
+            texture_width: max_size.x as u32,
+            texture_height: max_size.y as u32,
             ascender,
             descender,
             line_height,
+            space_width: space_metrics.advance_width as f32,
         };
 
         let inner = ArcRef::new(inner);
-        let font = Font { inner };
-
+        
         Font {
-            inner: ArcRef::clone(&font.inner),
+            inner,
         }
     }
 
-    pub fn bake_text(
+    pub fn line_height(&self) -> f32 {
+        self.inner.borrow().line_height
+    }
+
+    pub fn ascender(&self) -> f32 {
+        self.inner.borrow().ascender
+    }
+
+    pub fn descender(&self) -> f32 {
+        self.inner.borrow().descender
+    }
+
+    pub fn space_width(&self) -> f32 {
+        self.inner.borrow().space_width
+    }
+
+    pub fn texture_size(&self) -> Point2 {
+        let inner = self.inner.borrow();
+        Point2::new(inner.texture_width as i32, inner.texture_height as i32)
+    }
+
+    pub fn calculate_text_size(&self, text: &str) -> Vector2 {
+        let inner = self.inner.borrow();
+
+        let mut width = 0.0f32;
+        let mut height = inner.line_height;
+
+        let mut pen_x = 0.0;
+
+        for c in text.chars() {
+            let codepoint = c as u32;
+            if codepoint == '\n' as u32 {
+                width = width.max(pen_x);
+                pen_x = 0.0;
+                height += inner.line_height;
+                continue;
+            }
+
+            if codepoint == ' ' as u32 {
+                pen_x += inner.space_width;
+                continue;
+            }
+
+            if let Some(glyph) = inner.glyphs.get(&codepoint) {
+                pen_x += glyph.advance_x;
+            }
+        }
+
+        width = width.max(pen_x);
+
+        Vector2::new(width, height)
+    }
+
+    /// Bakes the text into a texture data buffer.
+    ///
+    /// This is useful for rendering static text without needing to render each glyph individually.
+    pub fn create_baked_text_raw(
         &self,
         text: &str,
         format: FontBakeFormat,
@@ -229,6 +305,11 @@ impl Font {
             if codepoint == '\n' as u32 {
                 pen.x = 0.0;
                 pen.y += inner.line_height as f32;
+                continue;
+            }
+
+            if codepoint == ' ' as u32 {
+                pen.x += inner.space_width;
                 continue;
             }
 
@@ -256,21 +337,24 @@ impl Font {
         let height = (max_y - min_y).ceil().max(1.0) as usize;
         let mut buffer = vec![0; width * height];
 
-        let mut pen = Vector2::new(0.0, 0.0);
+        let mut pen2 = Vector2::new(0.0, 0.0);
 
         for c in text.chars() {
             let codepoint = c as u32;
             if codepoint == '\n' as u32 {
-                pen.x = 0.0;
-                pen.y += inner.line_height as f32;
+                pen2.x = 0.0;
+                pen2.y += inner.line_height as f32;
+                continue;
+            }
+
+            if codepoint == ' ' as u32 {
+                pen2.x += inner.space_width;
                 continue;
             }
 
             if let Some(glyph) = inner.glyphs.get(&codepoint) {
-                let x0 = pen.x + glyph.bearing_x - min_x;
-                let y0 = pen.y + inner.ascender - (glyph.height + glyph.bearing_y) - min_y;
-
-                println!("Drawing glyph: {} at ({}, {})", codepoint, x0, y0);
+                let x0 = pen2.x + glyph.bearing_x - min_x;
+                let y0 = pen2.y + inner.ascender - (glyph.height + glyph.bearing_y) - min_y;
 
                 let atlas_offset_x = glyph.atlas_start_offset.x as usize;
                 let atlas_offset_y = glyph.atlas_start_offset.y as usize;
@@ -291,19 +375,21 @@ impl Font {
                     }
                 }
 
-                pen.x += glyph.advance_x;
+                pen2.x += glyph.advance_x;
             }
         }
 
         match format {
             FontBakeFormat::GrayScale => Ok((buffer, width as u32, height as u32)),
             FontBakeFormat::Rgba => {
-                let mut rgba_buffer = vec![0; width * height * 4];
-                for (i, pixel) in buffer.iter().enumerate() {
-                    rgba_buffer[i * 4] = *pixel; // R
-                    rgba_buffer[i * 4 + 1] = *pixel; // G
-                    rgba_buffer[i * 4 + 2] = *pixel; // B
-                    rgba_buffer[i * 4 + 3] = 255; // A
+                let mut rgba_buffer = Vec::with_capacity(width * height * 4);
+                for byte in buffer.iter() {
+                    let is_transparent = *byte == 0;
+
+                    rgba_buffer.push(*byte);
+                    rgba_buffer.push(*byte);
+                    rgba_buffer.push(*byte);
+                    rgba_buffer.push(if is_transparent { 0 } else { 255 });
                 }
 
                 Ok((rgba_buffer, width as u32, height as u32))
@@ -311,7 +397,7 @@ impl Font {
         }
     }
 
-    pub fn new_cached(path: &str) -> Result<Self, std::io::Error> {
+    pub(crate) fn new_cached(path: &str) -> Result<Self, std::io::Error> {
         let data = std::fs::read(path)?;
         let mut reader = std::io::Cursor::new(data);
 
@@ -414,6 +500,7 @@ impl Font {
         let ascender = reader.read_f32::<LittleEndian>()?;
         let descender = reader.read_f32::<LittleEndian>()?;
         let line_height = reader.read_f32::<LittleEndian>()?;
+        let space_width = reader.read_f32::<LittleEndian>()?;
 
         let inner = FontInner {
             info,
@@ -424,6 +511,7 @@ impl Font {
             ascender,
             descender,
             line_height,
+            space_width,
         };
 
         let inner = ArcRef::new(inner);
@@ -433,6 +521,9 @@ impl Font {
         })
     }
 
+    /// Saves the font cache to a file.
+    ///
+    /// This will create a binary file that can be loaded later using [FontManager::load_font_cached].
     pub fn save_font_cache(&self, path: &str) -> Result<(), std::io::Error> {
         let mut writer = std::fs::File::create(path)?;
         writer.write_all(&FONT_CACHE_MAGIC)?;
@@ -470,6 +561,7 @@ impl Font {
         writer2.write_f32::<LittleEndian>(inner.ascender)?;
         writer2.write_f32::<LittleEndian>(inner.descender)?;
         writer2.write_f32::<LittleEndian>(inner.line_height)?;
+        writer2.write_f32::<LittleEndian>(inner.space_width)?;
 
         let uncompressed_data: Vec<u8> = writer2.into_inner();
         let uncompressed_size = uncompressed_data.len() as u32;
@@ -487,6 +579,7 @@ impl Font {
         Ok(())
     }
 
+    /// Returns the image data of the font texture atlas.
     pub fn get_image_data(&self) -> (Vec<u8>, u32, u32) {
         let inner = self.inner.borrow();
         (
@@ -496,9 +589,94 @@ impl Font {
         )
     }
 
-    // pub fn create_gpu(&self, gpu: &mut GPU) -> Result<GPUFont, String> {
-    //     GPUFont::new(self, gpu)
-    // }
+    /// Returns the font's glyph for the given codepoint.
+    pub fn get_glyph(&self, codepoint: u32) -> Result<Glyph, FontError> {
+        let inner = self.inner.borrow();
+
+        inner
+            .glyphs
+            .get(&codepoint)
+            .cloned()
+            .ok_or(FontError::GlyphNotFound(codepoint))
+    }
+
+    /// Create a texture from the baked text.
+    /// 
+    /// This is useful for rendering static text without needing to render each glyph individually.
+    pub fn create_baked_text(
+        &self,
+        gpu: &mut GPU,
+        text: &str,
+    ) -> Result<Texture, TextureError> {
+        let (image_data, width, height) = self.create_baked_text_raw(text, FontBakeFormat::Rgba)
+            .map_err(|_| TextureError::InvalidTextureData)?;
+
+        let format = {
+            let gpu_inner = gpu.inner.borrow();
+
+            if gpu_inner.is_srgb() {
+                TextureFormat::Bgra8UnormSrgb
+            } else {
+                TextureFormat::Bgra8Unorm
+            }
+        };
+
+        let texture = gpu
+            .create_texture()
+            .set_raw_image(&image_data, Point2::new(width as i32, height as i32), format)
+            .set_usage(TextureUsage::Sampler)
+            .build()?;
+
+        Ok(texture)
+    }
+
+    /// Creates a texture from the font's glyph atlas.
+    pub fn create_texture(&self, gpu: &mut GPU) -> Result<Texture, TextureError> {
+        let gpu_inner = &gpu.inner;
+
+        self.create_texture_inner(&gpu_inner)
+    }
+
+    pub(crate) fn create_texture_inner(
+        &self,
+        gpu: &ArcRef<GPUInner>,
+    ) -> Result<Texture, TextureError> {
+        let (image_data, width, height) = self.get_image_data();
+
+        let format = {
+            let gpu_inner = gpu.borrow();
+
+            if gpu_inner.is_srgb() {
+                TextureFormat::Bgra8UnormSrgb
+            } else {
+                TextureFormat::Bgra8Unorm
+            }
+        };
+
+        let image_data = {
+            let mut data = Vec::with_capacity(image_data.len() * 4);
+            for &pixel in &image_data {
+                let is_transparent_pixel = pixel == 0;
+                data.push(pixel);
+                data.push(pixel);
+                data.push(pixel);
+                data.push(if is_transparent_pixel { 0 } else { 255 });
+            }
+
+            data
+        };
+
+        let texture = TextureBuilder::new(ArcRef::clone(gpu))
+            .set_raw_image(
+                &image_data,
+                Point2::new(width as i32, height as i32),
+                format,
+            )
+            .set_usage(TextureUsage::Sampler)
+            .build()?;
+
+        Ok(texture)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -519,6 +697,15 @@ pub struct Glyph {
     pub descender: f32,
 }
 
+impl Eq for Glyph {}
+
+impl PartialEq for Glyph {
+    fn eq(&self, other: &Self) -> bool {
+        self.codepoint == other.codepoint
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct FontManager {
     fonts: Vec<FontInfo>,
     cached_font: HashMap<u64, Font>,
@@ -527,6 +714,10 @@ pub struct FontManager {
 const DEFAULT_GLYPH_RANGE: [(u32, u32); 1] = [(0x20, 0x7E)]; // ASCII range
 
 impl FontManager {
+    /// Creates a new FontManager instance.
+    /// 
+    /// This will search for system fonts and cache them.
+    /// It will also initialize an empty cache for loaded fonts.
     pub fn new() -> Self {
         let fonts = system::search_system_font();
         FontManager {
@@ -535,6 +726,10 @@ impl FontManager {
         }
     }
 
+    /// Loads a font by name and size, optionally specifying a glyph range.
+    ///
+    /// If the font is already cached, it will return the cached version.
+    /// If the font is not found, it will return `None`.
     pub fn load_font(
         &mut self,
         font_name: &str,
@@ -583,5 +778,29 @@ impl FontManager {
         }
 
         None
+    }
+
+    /// Loads a font from a cached file.
+    ///
+    /// This will load the font from a binary file created by [Font::save_font_cache].
+    /// If the font is already cached, it will return the cached version.
+    pub fn load_font_cached(&mut self, path: &str) -> Option<Font> {
+        let hash_id = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            path.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        if self.cached_font.contains_key(&hash_id) {
+            return self.cached_font.get(&hash_id).cloned();
+        }
+
+        match Font::new_cached(path) {
+            Ok(font) => {
+                self.cached_font.insert(hash_id, font.clone());
+                Some(font)
+            }
+            Err(_) => None,
+        }
     }
 }

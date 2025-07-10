@@ -314,7 +314,7 @@ impl ApplicationHandler<WindowEvent> for RunnerInner {
             WindowEvent::Position { ref_id, pos } => {
                 if let Some(handle) = self.get_window_handle_by_ref(ref_id) {
                     let pos = PhysicalPosition::new(pos.x as i32, pos.y as i32);
-                    
+
                     let handle_ref = handle.lock();
                     let window = handle_ref.get_window();
 

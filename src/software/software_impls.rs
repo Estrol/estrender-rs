@@ -1,6 +1,9 @@
 use crate::{
     math::Vector2,
-    software::{software_inner::{PixelBufferInner, SoftbufferContext, SoftbufferSurface}, PixelBufferBuilderError, PixelBufferError},
+    software::{
+        PixelBufferBuilderError, PixelBufferError,
+        software_inner::{PixelBufferInner, SoftbufferContext, SoftbufferSurface},
+    },
     utils::ArcRef,
     window::Window,
 };
@@ -15,9 +18,7 @@ impl PixelBuffer {
         let window_inner = window.inner.wait_borrow_mut();
 
         let window_handle = {
-            let handle = window_inner
-                .window_pointer
-                .as_ref();
+            let handle = window_inner.window_pointer.as_ref();
 
             if handle.is_none() {
                 return Err(PixelBufferError::WindowPointerIsNull);
@@ -130,8 +131,8 @@ impl<'a> PixelBufferBuilder<'a> {
             return Err(PixelBufferBuilderError::CannotUseWithGPUWindow);
         }
 
-        let pixel_buffer = PixelBuffer::new(window)
-            .map_err(|e| PixelBufferBuilderError::PixelBufferError(e))?;
+        let pixel_buffer =
+            PixelBuffer::new(window).map_err(|e| PixelBufferBuilderError::PixelBufferError(e))?;
 
         let mut window_inner = window.inner.borrow_mut();
         window_inner.pixelbuffer = Some(pixel_buffer.inner.clone());

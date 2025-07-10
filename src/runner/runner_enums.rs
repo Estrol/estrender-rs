@@ -440,3 +440,12 @@ impl Into<Cursor> for CursorIcon {
         }
     }
 }
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum RunnerError {
+    ThreadMissmatch,
+    WinitEventLoopPanic,
+    WinitEventLoopFailed,
+    MaximumWindowReached,
+    FailedToCreateWindow(String),
+}

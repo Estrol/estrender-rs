@@ -7,20 +7,22 @@ use wgpu::{Extent3d, TextureDescriptor};
 use crate::{
     dbg_log,
     gpu::{BufferBuilder, buffer::BufferUsage, gpu_inner::GPUInner},
-    math::Rect,
+    math::Point2,
     utils::ArcRef,
 };
 
+mod texture_atlas;
 mod types;
+pub use texture_atlas::*;
 pub use types::*;
 
 pub enum TextureBuilderData<'a> {
     None,
     File(&'a str),
     Data(&'a [u8]),
-    Raw(Rect, &'a [u8], TextureFormat),
-    DepthStencil(Rect, Option<TextureFormat>),
-    RenderTarget(Rect, Option<TextureFormat>),
+    Raw(Point2, &'a [u8], TextureFormat),
+    DepthStencil(Point2, Option<TextureFormat>),
+    RenderTarget(Point2, Option<TextureFormat>),
 }
 
 pub struct TextureBuilder<'a> {
@@ -46,17 +48,20 @@ impl<'a> TextureBuilder<'a> {
         }
     }
 
-    pub fn with_file(mut self, file_path: &'a str) -> Self {
+    /// Create the texture with file path.
+    pub fn set_file(mut self, file_path: &'a str) -> Self {
         self.data = TextureBuilderData::File(file_path);
         self
     }
 
-    pub fn with_data(mut self, data: &'a [u8]) -> Self {
+    /// Sets the texture data from a file byte data.
+    pub fn set_file_data(mut self, data: &'a [u8]) -> Self {
         self.data = TextureBuilderData::Data(data);
         self
     }
 
-    pub fn with_raw(mut self, data: &'a [u8], size: Rect, format: TextureFormat) -> Self {
+    /// Initializes a texture with raw image data.
+    pub fn set_raw_image(mut self, data: &'a [u8], size: Point2, format: TextureFormat) -> Self {
         if format >= TextureFormat::Stencil8 && format <= TextureFormat::Depth32FloatStencil8 {
             panic!("Depth and stencil formats are not supported in raw data");
         }
@@ -70,8 +75,8 @@ impl<'a> TextureBuilder<'a> {
     /// This method sets the texture as a render target with the specified size and format.
     /// The size must be non-zero, and the format can be specified or defaulted to the swapchain format or RGBA8_UNORM_SRGB if the
     /// swapchain format is not available.
-    pub fn with_render_target(mut self, size: Rect, format: Option<TextureFormat>) -> Self {
-        if size.w == 0 || size.h == 0 {
+    pub fn set_render_target(mut self, size: Point2, format: Option<TextureFormat>) -> Self {
+        if size.x == 0 || size.y == 0 {
             panic!("Render target texture must have a size");
         }
 
@@ -82,15 +87,15 @@ impl<'a> TextureBuilder<'a> {
     /// Sets the sample count for the texture.
     ///
     /// This method allows you to specify the sample count for the texture. The default is 1.
-    /// **NOTE:** Will panic! if the sample count is not supported by the GPU (such above 4x in wasm).
-    pub fn with_sample_count(mut self, sample_count: SampleCount) -> Self {
+    /// **NOTE:** Will panic in WASM (not supported atm) which only support 1x and 4x.
+    pub fn set_sample_count(mut self, sample_count: SampleCount) -> Self {
         self.sample_count = sample_count.into();
         self
     }
 
     /// Initializes a texture as a depth stencil texture.
-    pub fn with_depth_stencil(mut self, size: Rect, format: Option<TextureFormat>) -> Self {
-        if size.w == 0 || size.h == 0 {
+    pub fn set_depth_stencil(mut self, size: Point2, format: Option<TextureFormat>) -> Self {
+        if size.x == 0 || size.y == 0 {
             panic!("Depth stencil texture must have a size");
         }
 
@@ -101,7 +106,8 @@ impl<'a> TextureBuilder<'a> {
         self
     }
 
-    pub fn with_mip_level_count(mut self, mip_level_count: u32) -> Self {
+    /// Sets the number of mip levels for the texture.
+    pub fn set_mip_level_count(mut self, mip_level_count: u32) -> Self {
         self.mip_level_count = mip_level_count;
         self
     }
@@ -110,7 +116,7 @@ impl<'a> TextureBuilder<'a> {
     ///
     /// This method allows you to specify the usage of the texture. However it cannot set the texture as
     /// a render target, as that must be done using the `with_render_target` method.
-    pub fn with_usage(mut self, usage: TextureUsage) -> Self {
+    pub fn set_usage(mut self, usage: TextureUsage) -> Self {
         if usage.contains(TextureUsage::RenderAttachment) {
             panic!("Render attachment textures must be created with the render target method");
         }
@@ -128,11 +134,9 @@ pub struct TextureInner {
     pub(crate) wgpu_texture: wgpu::Texture,
     pub(crate) wgpu_view: wgpu::TextureView,
 
-    pub(crate) size: Rect,
+    pub(crate) size: Point2,
     pub(crate) usages: TextureUsage,
     pub(crate) sample_count: SampleCount,
-    pub(crate) blend: TextureBlend,
-    pub(crate) sampler_info: TextureSampler,
     pub(crate) format: TextureFormat,
 
     pub(crate) mapped: bool,
@@ -204,7 +208,7 @@ impl Texture {
 
                 let rgba = image.to_rgba8();
                 let dimensions = rgba.dimensions();
-                let size = Rect::new(0, 0, dimensions.0 as i32, dimensions.1 as i32);
+                let size = Point2::new(dimensions.0 as i32, dimensions.1 as i32);
 
                 let texture = Self::create_texture(
                     builder.graphics,
@@ -247,7 +251,7 @@ impl Texture {
 
                 let rgba = image.to_rgba8();
                 let dimensions = rgba.dimensions();
-                let size = Rect::new(0, 0, dimensions.0 as i32, dimensions.1 as i32);
+                let size = Point2::new(dimensions.0 as i32, dimensions.1 as i32);
 
                 let texture = Self::create_texture(
                     builder.graphics,
@@ -381,20 +385,20 @@ impl Texture {
 
     fn create_texture(
         graphics: ArcRef<GPUInner>,
-        size: Rect,
+        size: Point2,
         sample_count: SampleCount,
         mip_level_count: u32,
         dimension: wgpu::TextureDimension,
         format: TextureFormat,
         usages: TextureUsage,
     ) -> Result<Self, TextureError> {
-        if size.w == 0 || size.h == 0 {
+        if size.x == 0 || size.y == 0 {
             return Err(TextureError::InvalidTextureSize);
         }
 
         let texture_size = Extent3d {
-            width: size.w as u32,
-            height: size.h as u32,
+            width: size.x as u32,
+            height: size.y as u32,
             depth_or_array_layers: 1,
         };
 
@@ -419,7 +423,6 @@ impl Texture {
             .get_device()
             .create_texture(&texture_create_info);
 
-        let sampler = TextureSampler::DEFAULT;
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some(view_label.as_str()),
             ..Default::default()
@@ -431,8 +434,6 @@ impl Texture {
 
             sample_count,
             usages,
-            blend: TextureBlend::NONE,
-            sampler_info: sampler,
             size,
             format,
 
@@ -447,13 +448,20 @@ impl Texture {
         })
     }
 
-    pub fn get_sampler(&self) -> TextureSampler {
-        self.inner.borrow().sampler_info.clone()
+    pub fn size(&self) -> Point2 {
+        self.inner.borrow().size
     }
 
-    pub fn set_sampler(&mut self, sampler: TextureSampler) {
-        let mut inner = self.inner.borrow_mut();
-        inner.sampler_info = sampler.clone();
+    pub fn format(&self) -> TextureFormat {
+        self.inner.borrow().format
+    }
+
+    pub fn sample_count(&self) -> SampleCount {
+        self.inner.borrow().sample_count
+    }
+
+    pub fn usages(&self) -> TextureUsage {
+        self.inner.borrow().usages
     }
 
     pub fn write<T: bytemuck::Pod>(&mut self, data: &[T]) -> Result<(), TextureError> {
@@ -465,13 +473,14 @@ impl Texture {
 
         let data: Vec<u8> = bytemuck::cast_slice(data).to_vec();
         let bytes_per_pixel = inner.format.get_size();
-        let unpadded_bytes_per_row = bytes_per_pixel * inner.size.w as u32;
+        let unpadded_bytes_per_row = bytes_per_pixel * inner.size.x as u32;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
 
         let mut padded_data =
-            Vec::with_capacity((padded_bytes_per_row * inner.size.h as u32) as usize);
-        for row in 0..inner.size.h as usize {
+            Vec::with_capacity((padded_bytes_per_row * inner.size.y as u32) as usize);
+
+        for row in 0..inner.size.y as usize {
             let start = row * unpadded_bytes_per_row as usize;
             let end = start + unpadded_bytes_per_row as usize;
             padded_data.extend_from_slice(&data[start..end]);
@@ -504,7 +513,7 @@ impl Texture {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(inner.size.h as u32),
+                    rows_per_image: Some(inner.size.y as u32),
                 },
             },
             wgpu::TexelCopyTextureInfo {
@@ -514,8 +523,8 @@ impl Texture {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: inner.size.w as u32,
-                height: inner.size.h as u32,
+                width: inner.size.x as u32,
+                height: inner.size.y as u32,
                 depth_or_array_layers: 1,
             },
         );
@@ -534,7 +543,7 @@ impl Texture {
     }
 
     pub fn read<T: bytemuck::Pod>(&self) -> Result<Vec<T>, TextureError> {
-        if self.inner.borrow().size.w == 0 || self.inner.borrow().size.h == 0 {
+        if self.inner.borrow().size.x == 0 || self.inner.borrow().size.y == 0 {
             return Err(TextureError::InvalidTextureSize);
         }
 
@@ -542,12 +551,12 @@ impl Texture {
         let inner_graphics = self.graphics.borrow();
 
         let bytes_per_pixel = 4; // For RGBA8/BGRA8, etc. Adjust if needed.
-        let unpadded_bytes_per_row = bytes_per_pixel * inner.size.w as u32;
+        let unpadded_bytes_per_row = bytes_per_pixel * inner.size.x as u32;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
 
         let buffer = BufferBuilder::<u8>::new(self.graphics.clone())
-            .set_data_empty((padded_bytes_per_row * inner.size.h as u32) as usize)
+            .set_data_empty((padded_bytes_per_row * inner.size.y as u32) as usize)
             .set_usage(BufferUsage::COPY_DST | BufferUsage::MAP_READ)
             .build();
 
@@ -576,7 +585,7 @@ impl Texture {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(inner.size.h as u32),
+                    rows_per_image: Some(inner.size.y as u32),
                 },
             },
             inner.size.into(),
@@ -596,7 +605,7 @@ impl Texture {
 
         let raw = raw.unwrap();
 
-        let height = inner.size.h as u32;
+        let height = inner.size.y as u32;
         let padded_bytes_per_row = padded_bytes_per_row as u32;
 
         let mut result = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
@@ -640,7 +649,7 @@ impl Texture {
 
                 self.mapped_type = TextureMappedType::Write;
                 self.mapped_buffer =
-                    vec![0; (self.inner.borrow().size.w * self.inner.borrow().size.h * 4) as usize];
+                    vec![0; (self.inner.borrow().size.x * self.inner.borrow().size.y * 4) as usize];
 
                 return Ok(&mut self.mapped_buffer);
             }

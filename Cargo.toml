@@ -1,6 +1,6 @@
 [package]
 name = "est-render"
-version = "0.1.24"
+version = "0.2.0"
 edition = "2024"
 authors = ["Estrol Mendex <estrol@estrol.dev>"]
 description = "Easy to use winit, softbuffer & wgpu abstractions"
@@ -10,7 +10,6 @@ license = "MIT-0 OR Apache-2.0"
 
 [features]
 x11 = []
-font = ["ttf-parser", "fontdue"]
 software = ["softbuffer"]
 enable-release-validation = []
 
@@ -29,13 +28,11 @@ rand = "0.9.0"
 scopeguard = "1.2.0"
 smol_str = "0.2.2"
 softbuffer = { version = "0.4.6", optional = true }
-ttf-parser = { version = "0.25.1", optional = true }
-fontdue = { version = "0.9.3", optional = true }
+ttf-parser = "0.25.1"
+fontdue = "0.9.3"
 wgpu = { version = "25.0.2", features = ["spirv"] }
 winit = "0.30.9"
+rect_packer = "0.2.1"
 
 [package.metadata.docs.rs]
 all-features = true
-
-[dev-dependencies]
-imgui = "0.12.0"

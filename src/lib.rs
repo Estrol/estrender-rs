@@ -1,7 +1,6 @@
 //! Easy to use winit, softbuffer & wgpu abstractions
 
 /// Font rendering and text layout utilities
-#[cfg(feature = "font")]
 pub mod font;
 /// GPU graphics rendering abstractions
 pub mod gpu;
@@ -23,9 +22,8 @@ use gpu::{GPU, GPUAdapter};
 use runner::Runner;
 use window::Window;
 
-#[cfg(feature = "font")]
 use crate::font::FontManager;
-use crate::gpu::GPUBuilder;
+use crate::{gpu::GPUBuilder, runner::RunnerError};
 
 #[cfg(feature = "software")]
 use crate::software::PixelBufferBuilder;
@@ -34,7 +32,7 @@ use crate::software::PixelBufferBuilder;
 ///
 /// **NOTE:** When calling this function, the thread will be made the main thread,
 /// future calls to this function will panic if called from a different thread.
-pub fn create_runner() -> Result<Runner, String> {
+pub fn create_runner() -> Result<Runner, RunnerError> {
     Runner::new()
 }
 
@@ -91,7 +89,6 @@ pub fn query_gpu_adapter(window: Option<&Window>) -> Vec<GPUAdapter> {
 /// Creates a new [FontManager] instance.
 ///
 /// This is useful for loading and managing fonts for text rendering.
-#[cfg(feature = "font")]
 pub fn create_font_manager() -> FontManager {
     FontManager::new()
 }

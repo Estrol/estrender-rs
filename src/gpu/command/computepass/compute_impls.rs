@@ -1,48 +1,8 @@
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-};
+use std::{collections::HashMap, hash::{DefaultHasher, Hash, Hasher}, sync::{atomic::AtomicBool, Arc}};
 
 use wgpu::CommandEncoder;
 
-#[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-use crate::gpu::ShaderReflect;
-use crate::{
-    gpu::{
-        BindGroupCreateInfo, BindGroupLayout, ComputePipeline, ComputePipelineDesc,
-        gpu_inner::GPUInner, shader::ComputeShader,
-    },
-    prelude::{Buffer, BufferUsage, ShaderBindingType},
-    utils::ArcRef,
-};
-
-use super::{BindGroupAttachment, BindGroupType};
-
-#[derive(Clone, Debug, Hash)]
-pub(crate) struct IntermediateComputeBinding {
-    pub shader: wgpu::ShaderModule,
-    pub layout: Vec<BindGroupLayout>,
-    pub entry_point: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum ComputeShaderBinding {
-    Intermediate(IntermediateComputeBinding),
-    Pipeline(ComputePipeline),
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ComputePassInner {
-    pub cmd: ArcRef<CommandEncoder>,
-    pub shader: Option<ComputeShaderBinding>,
-
-    pub queues: Vec<ComputePassQueue>,
-    pub attachments: Vec<BindGroupAttachment>,
-    pub push_constant: Option<Vec<u8>>,
-
-    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-    pub reflection: Option<ShaderReflect>,
-}
+use crate::{gpu::{computepass::compute_inner::ComputePassInner, gpu_inner::GPUInner, BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, BufferUsage, ComputePassBuildError, ComputePipeline, ComputePipelineDesc, ComputeShader, ComputeShaderBinding, IntermediateComputeBinding, ShaderBindingType, ShaderReflect}, utils::ArcRef};
 
 #[derive(Clone, Debug)]
 pub struct ComputePass {
@@ -51,10 +11,11 @@ pub struct ComputePass {
 }
 
 impl ComputePass {
-    pub(crate) fn new(graphics: ArcRef<GPUInner>, cmd: ArcRef<CommandEncoder>) -> Self {
+    pub(crate) fn new(graphics: ArcRef<GPUInner>, cmd: ArcRef<CommandEncoder>, atomic_pass: Arc<AtomicBool>) -> Result<Self, ComputePassBuildError> {
         let inner = ComputePassInner {
             cmd,
             shader: None,
+            atomic_pass,
 
             queues: Vec::new(),
             attachments: Vec::new(),
@@ -64,10 +25,10 @@ impl ComputePass {
             reflection: None,
         };
 
-        ComputePass {
+        Ok(ComputePass {
             graphics,
             inner: ArcRef::new(inner),
-        }
+        })
     }
 
     pub fn set_shader(&mut self, shader: Option<&ComputeShader>) {
@@ -328,7 +289,7 @@ impl ComputePass {
         let queue = ComputePassQueue {
             pipeline,
             bind_group,
-            ty: DispatchType::Dispatch { x, y, z },
+            ty: super::DispatchType::Dispatch { x, y, z },
             push_constant: inner.push_constant.clone(),
             debug: None,
         };
@@ -352,7 +313,7 @@ impl ComputePass {
         let queue = ComputePassQueue {
             pipeline,
             bind_group,
-            ty: DispatchType::DispatchIndirect {
+            ty: super::DispatchType::DispatchIndirect {
                 buffer: buffer.inner.borrow().buffer.clone(),
                 offset,
             },
@@ -554,14 +515,16 @@ impl ComputePass {
             }
 
             match &queue.ty {
-                DispatchType::Dispatch { x, y, z } => {
+                super::DispatchType::Dispatch { x, y, z } => {
                     cpass.dispatch_workgroups(*x, *y, *z);
                 }
-                DispatchType::DispatchIndirect { buffer, offset } => {
+                super::DispatchType::DispatchIndirect { buffer, offset } => {
                     cpass.dispatch_workgroups_indirect(buffer, *offset);
                 }
             }
         }
+
+        inner.atomic_pass.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -571,17 +534,11 @@ impl Drop for ComputePass {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub enum DispatchType {
-    Dispatch { x: u32, y: u32, z: u32 },
-    DispatchIndirect { buffer: wgpu::Buffer, offset: u64 },
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ComputePassQueue {
     pub pipeline: wgpu::ComputePipeline,
     pub bind_group: Vec<(u32, wgpu::BindGroup)>,
-    pub ty: DispatchType,
+    pub ty: super::DispatchType,
     pub push_constant: Option<Vec<u8>>,
 
     pub debug: Option<String>,

@@ -2,7 +2,12 @@ use winit::{event, event_loop::EventLoopProxy};
 
 #[cfg(feature = "software")]
 use crate::software::software_inner::PixelBufferInner;
-use crate::{gpu::gpu_inner::GPUInner, math::Point2, runner::{runner_inner::Handle, WindowEvent}, utils::{ArcMut, ArcRef}};
+use crate::{
+    gpu::gpu_inner::GPUInner,
+    math::Point2,
+    runner::{WindowEvent, runner_inner::Handle},
+    utils::{ArcMut, ArcRef},
+};
 
 pub(crate) struct WindowInner {
     pub window_id: usize,

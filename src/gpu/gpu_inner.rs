@@ -5,12 +5,8 @@ use winit::dpi::PhysicalSize;
 
 use crate::{
     gpu::{
-        AdapterBackend, BindGroupCreateInfo, BindGroupManager, Buffer, ComputePipelineDesc,
-        GPUAdapter, GraphicsPipelineDesc, GraphicsShader, Limits, PipelineManager, SwapchainError,
-        Texture,
-    },
-    runner::runner_inner::Handle,
-    utils::ArcMut,
+        AdapterBackend, BindGroupCreateInfo, BindGroupManager, ComputePipelineDesc, DrawingGlobalState, GPUAdapter, GraphicsPipelineDesc, Limits, PipelineManager, SwapchainError
+    }, runner::runner_inner::Handle, utils::{ArcMut, ArcRef}
 };
 
 lazy_static::lazy_static! {
@@ -36,10 +32,7 @@ pub(crate) struct GPUInner {
     pub pipeline_manager: Option<PipelineManager>,
     pub bind_group_manager: Option<BindGroupManager>,
 
-    pub drawing_default_texture: Option<Texture>,
-    pub drawing_default_shader: Option<GraphicsShader>,
-    pub drawing_vertex_buffer: Option<Buffer>,
-    pub drawing_index_buffer: Option<Buffer>,
+    pub drawing_state: Option<ArcRef<DrawingGlobalState>>,
 }
 
 #[allow(unused)]
@@ -330,11 +323,21 @@ impl GPUInner {
             pipeline_cache,
             pipeline_manager: Some(pipeline_manager),
             bind_group_manager: Some(bind_group_manager),
-            drawing_default_shader: None,
-            drawing_default_texture: None,
-            drawing_vertex_buffer: None,
-            drawing_index_buffer: None,
+            
+            drawing_state: None,
         })
+    }
+
+    pub fn is_srgb(&self) -> bool {
+        if self.is_invalid {
+            panic!("Invalid GPU context");
+        }
+
+        if self.config.is_none() {
+            panic!("GPU config not initialized");
+        }
+
+        self.config.as_ref().unwrap().format.is_srgb()
     }
 
     pub fn is_vsync(&self) -> bool {
@@ -663,8 +666,5 @@ impl PartialEq for GPUInner {
             && self.pipeline_cache == other.pipeline_cache
             && self.pipeline_manager == other.pipeline_manager
             && self.bind_group_manager == other.bind_group_manager
-            && self.drawing_default_texture == other.drawing_default_texture
-            && self.drawing_default_shader == other.drawing_default_shader
-            && self.drawing_vertex_buffer == other.drawing_vertex_buffer
     }
 }

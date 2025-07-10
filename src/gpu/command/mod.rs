@@ -1,19 +1,21 @@
-use wgpu::CommandEncoder;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
-use crate::{dbg_log, gpu::gpu_inner::GPUInner, log, math::Point2, utils::ArcRef};
+use wgpu::{CommandEncoder, util::TextureBlitter};
+
+use crate::{dbg_log, gpu::gpu_inner::GPUInner, log, utils::ArcRef};
 
 use super::{
-    SwapchainError, TextureUsage,
+    SwapchainError,
     buffer::Buffer,
     texture::{Texture, TextureBlend},
 };
 
-pub(crate) mod compute;
+pub(crate) mod renderpass;
+pub use renderpass::*;
 pub(crate) mod drawing;
-pub(crate) mod graphics;
-
-pub use compute::*;
-pub use graphics::*;
+pub use drawing::*;
+pub(crate) mod computepass;
+pub use computepass::*;
 
 pub enum PassAttachment {
     Texture(Texture, TextureBlend),
@@ -33,18 +35,23 @@ pub struct TextureInput<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub enum CommandBufferBuildError {
+    None
+}
+
+#[derive(Clone, Debug)]
 pub struct CommandBuffer {
     pub(crate) inner: ArcRef<GPUInner>,
 
     pub(crate) command: Option<ArcRef<CommandEncoder>>,
-    pub(crate) on_renderpass: bool,
-    pub(crate) on_compute: bool,
+    pub(crate) on_renderpass: Arc<AtomicBool>,
+    pub(crate) on_compute: Arc<AtomicBool>,
 
     pub(crate) swapchain: SurfaceTexture,
 }
 
 impl CommandBuffer {
-    pub(crate) fn new(inner: ArcRef<GPUInner>) -> CommandBuffer {
+    pub(crate) fn new(inner: ArcRef<GPUInner>) -> Result<Self, CommandBufferBuildError> {
         let inner_ref = inner.borrow();
         let command =
             inner_ref
@@ -55,20 +62,20 @@ impl CommandBuffer {
 
         drop(inner_ref);
 
-        CommandBuffer {
+        Ok(Self {
             inner,
             command: Some(ArcRef::new(command)),
-            on_renderpass: false,
-            on_compute: false,
+            on_renderpass: Arc::new(AtomicBool::new(false)),
+            on_compute: Arc::new(AtomicBool::new(false)),
 
             swapchain: SurfaceTexture::new(),
-        }
+        })
     }
 
     pub(crate) fn new_with_surface(
         inner: ArcRef<GPUInner>,
         surface: SurfaceTexture,
-    ) -> CommandBuffer {
+    ) -> Result<Self, CommandBufferBuildError> {
         let inner_ref = inner.borrow();
         let command =
             inner_ref
@@ -79,20 +86,42 @@ impl CommandBuffer {
 
         drop(inner_ref);
 
-        CommandBuffer {
+        Ok(Self {
             inner,
             command: Some(ArcRef::new(command)),
-            on_renderpass: false,
-            on_compute: false,
+            on_renderpass: Arc::new(AtomicBool::new(false)),
+            on_compute: Arc::new(AtomicBool::new(false)),
 
             swapchain: surface,
-        }
+        })
+    }
+
+    /// Creates a new renderpass builder.
+    /// 
+    /// This function is used to create a renderpass builder that can be used to
+    /// configure and build a render pass.
+    /// 
+    /// This is useful when you want to create a render pass with specific
+    /// configurations, such as adding color attachments, depth attachments, etc.
+    pub fn renderpass_builder(&mut self) -> RenderpassBuilder {
+        let gpu_arc_ref = ArcRef::clone(&self.inner);
+        let cmd_arc_ref = ArcRef::clone(self.command.as_ref().unwrap());
+        let atomic_pass = Arc::clone(&self.on_renderpass);
+
+        self.on_renderpass.store(true, Ordering::Relaxed);
+
+        RenderpassBuilder::new(gpu_arc_ref, cmd_arc_ref, atomic_pass)
     }
 
     /// Begins a new graphics pass.
-    pub fn begin_renderpass(&mut self) -> Option<RenderPass> {
+    /// 
+    /// This function will initiate a renderpass with the swapchain's surface texture.
+    /// If the swapchain is not valid, it will attempt to recreate it.
+    /// 
+    /// The swapchain will be used as the color attachment at index 0 with a default blend mode (NONE).
+    pub fn begin_renderpass(&mut self) -> Result<RenderPass, RenderPassBuildError> {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if self.on_renderpass || self.on_compute {
+        if self.on_renderpass.load(Ordering::Relaxed) || self.on_compute.load(Ordering::Relaxed) {
             panic!("CMD already in a render pass or compute pass");
         }
 
@@ -110,88 +139,179 @@ impl CommandBuffer {
                 }
                 Err(err) => {
                     log!("Swapchain error: {}", err);
-                    return None;
+                    return Err(RenderPassBuildError::SwapchainError(format!(
+                        "Failed to create swapchain: {}",
+                        err
+                    )));
                 }
             }
         }
 
-        // let format = self.swapchain.as_ref().unwrap().texture.format();
-        // let size = self.swapchain.as_ref().unwrap().texture.size();
-
-        let view = self.swapchain.get_view();
-        let format = self.swapchain.get_format();
-        let size = self.swapchain.get_size();
-
-        Some(RenderPass::new(
-            ArcRef::clone(&self.inner),
-            ArcRef::clone(self.command.as_ref().unwrap()),
-            view,
-            format.into(),
-            Point2::new(size.width as i32, size.height as i32),
-        ))
-    }
-
-    /// Begins a new graphics pass to a render target texture.
-    pub fn begin_texture<'a>(&'a mut self, _texture: &'a Texture) -> Option<RenderPass> {
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if self.on_renderpass || self.on_compute {
-            panic!("CMD already in a render pass or compute pass");
-        }
+        self.on_renderpass.store(true, Ordering::Relaxed);
 
         let gpu_arc_ref = ArcRef::clone(&self.inner);
         let cmd_arc_ref = ArcRef::clone(self.command.as_ref().unwrap());
+        let atomic_pass = Arc::clone(&self.on_renderpass);
 
-        self.on_renderpass = true;
-        scopeguard::defer! {
-            self.on_renderpass = false;
-        }
-
-        let texture = _texture.inner.borrow();
-        if !texture.usages.contains(TextureUsage::RenderAttachment) {
-            return None;
-        }
-
-        let texture_view = texture.wgpu_view.clone();
-        let format = texture.format;
-        let size = texture.size;
-
-        drop(texture);
-
-        Some(RenderPass::new(
-            gpu_arc_ref,
-            cmd_arc_ref,
-            texture_view,
-            format.into(),
-            Point2::new(size.w as i32, size.h as i32),
-        ))
+        RenderpassBuilder::new(gpu_arc_ref, cmd_arc_ref, atomic_pass)
+            .add_surface_color_attachment(&self.swapchain, None)
+            .build()
     }
 
-    /// Begins a new compute pass.
-    pub fn begin_computepass(&mut self) -> Option<ComputePass> {
+    /// Begins a new graphics pass with a depth texture.
+    ///
+    /// This function is used to create a render pass with a depth texture for depth-only rendering.
+    /// Which can be useful for shadow mapping or other depth-based effects.
+    pub fn begin_depth_texture(
+        &mut self,
+        texture: &Texture,
+    ) -> Result<RenderPass, RenderPassBuildError> {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-        if self.on_renderpass || self.on_compute {
+        if self.on_renderpass.load(Ordering::Relaxed) || self.on_compute.load(Ordering::Relaxed) {
             panic!("CMD already in a render pass or compute pass");
         }
 
-        let gpu_arc_ref = ArcRef::clone(&self.inner);
-        let cmd_ref = ArcRef::clone(self.command.as_ref().unwrap());
+        self.on_renderpass.store(true, Ordering::Relaxed);
 
-        self.on_compute = true;
-        scopeguard::defer! {
-            self.on_compute = false;
+        let gpu_arc_ref = ArcRef::clone(&self.inner);
+        let cmd_arc_ref = ArcRef::clone(self.command.as_ref().unwrap());
+        let atomic_pass = Arc::clone(&self.on_renderpass);
+
+        RenderpassBuilder::new(gpu_arc_ref, cmd_arc_ref, atomic_pass)
+            .set_depth_attachment(texture)
+            .build()
+    }
+
+    /// Begins a new graphics pass to a render target texture.
+    ///
+    /// Can be used to render to a specific texture instead of the default swapchain.
+    /// This is useful for offscreen rendering or rendering to a texture for later use.
+    /// 
+    /// The render texture will be placed at index 0 with a default blend mode (NONE).
+    pub fn begin_texture<'a>(
+        &'a mut self,
+        texture: &'a Texture,
+    ) -> Result<RenderPass, RenderPassBuildError> {
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        if self.on_renderpass.load(Ordering::Relaxed) || self.on_compute.load(Ordering::Relaxed) {
+            panic!("CMD already in a render pass or compute pass");
         }
 
-        Some(ComputePass::new(gpu_arc_ref, cmd_ref))
+        self.on_renderpass.store(false, Ordering::Relaxed);
+
+        let gpu_arc_ref = ArcRef::clone(&self.inner);
+        let cmd_arc_ref = ArcRef::clone(self.command.as_ref().unwrap());
+        let atomic_pass = Arc::clone(&self.on_renderpass);
+
+        RenderpassBuilder::new(gpu_arc_ref, cmd_arc_ref, atomic_pass)
+            .add_color_attachment(texture, None)
+            .build()
+    }
+
+    /// Begins a new compute pass.
+    pub fn begin_computepass(&mut self) -> Result<ComputePass, ComputePassBuildError> {
+        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        if self.on_renderpass.load(Ordering::Relaxed) || self.on_compute.load(Ordering::Relaxed) {
+            panic!("CMD already in a render pass or compute pass");
+        }
+
+        self.on_renderpass.store(false, Ordering::Relaxed);
+
+        let gpu_arc_ref = ArcRef::clone(&self.inner);
+        let cmd_ref = ArcRef::clone(self.command.as_ref().unwrap());
+        let atomic_pass = Arc::clone(&self.on_compute);
+
+        ComputePass::new(gpu_arc_ref, cmd_ref, atomic_pass)
     }
 
     /// Writes a buffer to a destination buffer.
+    ///
+    /// This is useful to copy from compute buffers or other buffers
+    /// to a destination buffer, such as when you want to update a buffer with new data
     pub fn write_buffer(&mut self, src: &Buffer, dst: &Buffer) {
         dst.write_cmd(src, self);
     }
 
     /// Writes a buffer to a destination buffer with raw data.
+    ///
+    /// Will panic if the data is not compatible with the destination buffer, such
+    /// in the case of mismatched sizes or types.
     pub fn write_buffer_raw<T: bytemuck::Pod>(&mut self, data: &[T], dst: &Buffer) {
         dst.write_raw_cmd(data, self);
+    }
+
+    /// Copies a source texture to a destination texture.
+    ///
+    /// This function uses a texture blitter to perform the copy operation, such copying
+    /// between different texture formats or sizes (ex from a render target to a texture).
+    pub fn blit_texture(&mut self, src: &Texture, dst: &Texture) {
+        let gpu_inner = self.inner.borrow();
+        let mut cmd = self.command.as_ref().unwrap().borrow_mut();
+
+        let blitter = {
+            let dst_format = dst.inner.borrow().format;
+
+            TextureBlitter::new(gpu_inner.get_device(), dst_format.into())
+        };
+
+        let src_view = &src.inner.borrow().wgpu_view;
+
+        let dst_view = &dst.inner.borrow().wgpu_view;
+
+        blitter.copy(&gpu_inner.get_device(), &mut cmd, src_view, dst_view);
+    }
+
+    /// Copies a source texture to a destination texture.
+    ///
+    /// The 'src' texture must be compatible with the 'dst' texture in format and size.
+    ///
+    /// This is useful for copying textures that are already in the GPU memory,
+    /// such as when you want to copy a texture from one render target to another.
+    pub fn copy_texture(&mut self, src: &Texture, dst: &Texture) {
+        let mut cmd = self.command.as_ref().unwrap().borrow_mut();
+
+        // Make sure src and dst texture format and size are compatible
+        let src_inner = src.inner.borrow();
+        let dst_inner = dst.inner.borrow();
+
+        if src_inner.format != dst_inner.format {
+            panic!("Source and destination textures must have the same format");
+        }
+
+        if src_inner.size != dst_inner.size {
+            panic!("Source and destination textures must have the same size");
+        }
+
+        if src_inner.wgpu_texture.mip_level_count() != 1 {
+            panic!("Source texture must have only one mip level");
+        }
+
+        if dst_inner.wgpu_texture.mip_level_count() != 1 {
+            panic!("Destination texture must have only one mip level");
+        }
+
+        let src_tex = &src_inner.wgpu_texture;
+        let dst_tex = &dst_inner.wgpu_texture;
+
+        cmd.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfoBase {
+                texture: src_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfoBase {
+                texture: dst_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: src_inner.size.x as u32,
+                height: src_inner.size.y as u32,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     pub fn end(&mut self, present: bool) {
@@ -212,12 +332,43 @@ impl CommandBuffer {
         }
     }
 
-    pub fn get_surface_texture(&self) -> Option<SurfaceTexture> {
-        if self.swapchain.is_valid() {
-            Some(self.swapchain.clone())
-        } else {
-            None
+    /// Returns the current surface texture handle.
+    /// 
+    /// This will attach current swapchain texture to the command buffer if it is not already set.
+    pub fn get_surface_texture(&mut self) -> Result<SurfaceTexture, SurfaceTextureError> {
+        if !self.swapchain.is_valid() {
+            let inner_ref = self.inner.borrow();
+
+            let swapchain = inner_ref.get_swapchain();
+
+            match swapchain {
+                Ok(swapchain) => {
+                    self.swapchain.set_texture(swapchain);
+                }
+                Err(SwapchainError::Suboptimal(swapchain)) => {
+                    self.swapchain.set_texture(swapchain);
+                }
+                Err(err) => {
+                    match err {
+                        SwapchainError::NotAvailable => {
+                            return Err(SurfaceTextureError::NotAvailable);
+                        }
+                        SwapchainError::ConfigNeeded => {
+                            return Err(SurfaceTextureError::ConfigNeeded);
+                        }
+                        SwapchainError::DeviceLost => {
+                            return Err(SurfaceTextureError::DeviceLost);
+                        }
+                        _ => {
+                            log!("Swapchain error: {}", err);
+                            return Err(SurfaceTextureError::NotAvailable);
+                        }
+                    }
+                }
+            }
         }
+
+        Ok(self.swapchain.clone())
     }
 }
 
@@ -233,12 +384,23 @@ impl Drop for CommandBuffer {
 }
 
 #[derive(Clone, Debug)]
-pub struct SurfaceTextureInner {
-    pub(crate) texture: Option<wgpu::SurfaceTexture>,
-    pub(crate) suboptimal: bool,
-    pub(crate) presented: bool,
+pub enum SurfaceTextureError {
+    NotAvailable,
+    ConfigNeeded,
+    DeviceLost,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SurfaceTextureInner {
+    pub texture: Option<wgpu::SurfaceTexture>,
+    pub suboptimal: bool,
+    pub presented: bool,
+}
+
+/// Represents a texture handle that is used for rendering to the surface (swapchain).
+/// 
+/// This texture is created by the GPU and is used to present the rendered content to the screen.
+/// Can be used with the [CommandBuffer] to render to the surface.
 #[derive(Clone, Debug)]
 pub struct SurfaceTexture {
     pub(crate) inner: ArcRef<SurfaceTextureInner>,

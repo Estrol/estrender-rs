@@ -1,9 +1,11 @@
 use crate::{
     gpu::{
-        buffer, command, gpu_inner::GPUInner, pipeline, shader, texture, AdapterBackend, GPUWaitType, SurfaceTexture, TextureFormat
+        AdapterBackend, GPUWaitType, SurfaceTexture, TextureFormat, buffer, command,
+        gpu_inner::GPUInner, pipeline, shader, texture,
     },
     runner::runner_inner::Handle,
-    utils::{ArcMut, ArcRef}, window::Window,
+    utils::{ArcMut, ArcRef},
+    window::Window,
 };
 
 #[derive(Debug, Clone)]
@@ -111,6 +113,14 @@ impl GPU {
         inner.is_vsync()
     }
 
+    /// Check if the swapchain is using sRGB format.
+    ///
+    /// This is useful for determining if you want to use sRGB textures or not.
+    pub fn is_surface_srgb(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner.is_srgb()
+    }
+
     pub fn set_panic_callback<F>(&mut self, _callback: F)
     where
         F: Fn(&str) + Send + Sync + 'static,
@@ -119,8 +129,8 @@ impl GPU {
     }
 
     /// Begins a new command buffer.
-    pub fn begin_command(&mut self) -> Option<command::CommandBuffer> {
-        Some(command::CommandBuffer::new(self.inner.clone()))
+    pub fn begin_command(&mut self) -> Result<command::CommandBuffer, command::CommandBufferBuildError> {
+        command::CommandBuffer::new(self.inner.clone())
     }
 
     /// Begins a new command buffer with a surface texture.
@@ -130,16 +140,21 @@ impl GPU {
     pub fn begin_command_with_surface(
         &mut self,
         surface: SurfaceTexture,
-    ) -> Option<command::CommandBuffer> {
-        Some(command::CommandBuffer::new_with_surface(
+    ) -> Result<command::CommandBuffer, command::CommandBufferBuildError> {
+        command::CommandBuffer::new_with_surface(
             self.inner.clone(),
             surface,
-        ))
+        )
     }
 
     /// Create a new texture.
     pub fn create_texture(&mut self) -> texture::TextureBuilder {
         texture::TextureBuilder::new(self.inner.clone())
+    }
+
+    /// Create a new texture atlas.
+    pub fn create_texture_atlas(&mut self) -> texture::TextureAtlasBuilder {
+        texture::TextureAtlasBuilder::new(self.inner.clone())
     }
 
     /// Create a new graphics shader.

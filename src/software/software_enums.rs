@@ -36,9 +36,15 @@ impl std::fmt::Display for PixelBufferError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PixelBufferError::WindowPointerIsNull => write!(f, "Window pointer is null"),
-            PixelBufferError::ContextCreationFailed => write!(f, "Failed to create pixel buffer context"),
-            PixelBufferError::SurfaceCreationFailed => write!(f, "Failed to create pixel buffer surface"),
-            PixelBufferError::InvalidSize(width, height) => write!(f, "Invalid size: {}x{}", width, height),
+            PixelBufferError::ContextCreationFailed => {
+                write!(f, "Failed to create pixel buffer context")
+            }
+            PixelBufferError::SurfaceCreationFailed => {
+                write!(f, "Failed to create pixel buffer surface")
+            }
+            PixelBufferError::InvalidSize(width, height) => {
+                write!(f, "Invalid size: {}x{}", width, height)
+            }
             PixelBufferError::InvalidSurfaceSize => write!(f, "Pixel buffer surface size is zero"),
             PixelBufferError::BufferFetchFailed => write!(f, "Failed to fetch pixel buffer"),
             PixelBufferError::BufferTooSmall => write!(f, "Pixel buffer is too small"),
@@ -46,7 +52,6 @@ impl std::fmt::Display for PixelBufferError {
         }
     }
 }
-
 
 #[derive(Clone, Copy, Debug)]
 pub enum PixelBufferBuilderError {
@@ -58,8 +63,13 @@ pub enum PixelBufferBuilderError {
 impl std::fmt::Display for PixelBufferBuilderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PixelBufferBuilderError::WindowIsNull => write!(f, "PixelBuffer must be created with a window"),
-            PixelBufferBuilderError::CannotUseWithGPUWindow => write!(f, "PixelBuffer cannot be created alongside GPU (hardware rendering)"),
+            PixelBufferBuilderError::WindowIsNull => {
+                write!(f, "PixelBuffer must be created with a window")
+            }
+            PixelBufferBuilderError::CannotUseWithGPUWindow => write!(
+                f,
+                "PixelBuffer cannot be created alongside GPU (hardware rendering)"
+            ),
             PixelBufferBuilderError::PixelBufferError(e) => write!(f, "PixelBuffer error: {}", e),
         }
     }

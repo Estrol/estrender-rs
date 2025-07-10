@@ -15,7 +15,7 @@ pub enum GPUWaitType {
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SwapchainError {
+pub(crate) enum SwapchainError {
     NotAvailable,
     ConfigNeeded,
     DeviceLost,

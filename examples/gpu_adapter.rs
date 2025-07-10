@@ -41,8 +41,8 @@ fn main() {
             }
         }
 
-        if let Some(mut cmd) = gpu.begin_command() {
-            if let Some(mut rp) = cmd.begin_renderpass() {
+        if let Ok(mut cmd) = gpu.begin_command() {
+            if let Ok(mut rp) = cmd.begin_renderpass() {
                 rp.set_clear_color(Color::LIGHTBLUE);
             }
         }

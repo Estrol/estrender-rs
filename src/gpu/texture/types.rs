@@ -214,8 +214,8 @@ impl TextureBlend {
     pub const ALPHA_BLEND: Self = Self {
         color_blend: BlendOperation::Add,
         alpha_blend: BlendOperation::Add,
-        color_src_factor: BlendFactor::One,
-        color_dst_factor: BlendFactor::Zero,
+        color_src_factor: BlendFactor::SrcAlpha,
+        color_dst_factor: BlendFactor::OneMinusSrcAlpha,
         alpha_src_factor: BlendFactor::One,
         alpha_dst_factor: BlendFactor::Zero,
         color_blend_constant: [0xFF, 0xFF, 0xFF, 0xFF],
@@ -227,7 +227,7 @@ impl TextureBlend {
         color_src_factor: BlendFactor::One,
         color_dst_factor: BlendFactor::One,
         alpha_src_factor: BlendFactor::One,
-        alpha_dst_factor: BlendFactor::One,
+        alpha_dst_factor: BlendFactor::Zero,
         color_blend_constant: [0xFF, 0xFF, 0xFF, 0xFF],
     };
 
@@ -250,10 +250,8 @@ impl TextureBlend {
         alpha_dst_factor: BlendFactor::DstAlpha,
         color_blend_constant: [0xFF, 0xFF, 0xFF, 0xFF],
     };
-}
 
-impl Into<wgpu::BlendState> for TextureBlend {
-    fn into(self) -> wgpu::BlendState {
+    pub(crate) fn create_wgpu_blend_state(&self) -> wgpu::BlendState {
         wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: Self::blend_factor_convert(self.color_src_factor),
@@ -267,37 +265,43 @@ impl Into<wgpu::BlendState> for TextureBlend {
             },
         }
     }
-}
 
-impl Into<wgpu::ColorWrites> for TextureBlend {
-    fn into(self) -> wgpu::ColorWrites {
+    pub(crate) fn create_wgpu_color_write_mask(&self) -> wgpu::ColorWrites {
         let write_mask = self.color_blend_constant[0]
             | self.color_blend_constant[1] << 8
             | self.color_blend_constant[2] << 16
             | self.color_blend_constant[3] << 24;
 
-        let write_mask = {
-            let mut mask = wgpu::ColorWrites::empty();
-            if write_mask & 0x00000001 != 0 {
-                mask |= wgpu::ColorWrites::RED;
-            }
-            if write_mask & 0x00000100 != 0 {
-                mask |= wgpu::ColorWrites::GREEN;
-            }
-            if write_mask & 0x00010000 != 0 {
-                mask |= wgpu::ColorWrites::BLUE;
-            }
-            if write_mask & 0x01000000 != 0 {
-                mask |= wgpu::ColorWrites::ALPHA;
-            }
-            if mask.is_empty() {
-                wgpu::ColorWrites::ALL
-            } else {
-                mask
-            }
-        };
+        let mut mask = wgpu::ColorWrites::empty();
+        if write_mask & 0x00000001 != 0 {
+            mask |= wgpu::ColorWrites::RED;
+        }
+        if write_mask & 0x00000100 != 0 {
+            mask |= wgpu::ColorWrites::GREEN;
+        }
+        if write_mask & 0x00010000 != 0 {
+            mask |= wgpu::ColorWrites::BLUE;
+        }
+        if write_mask & 0x01000000 != 0 {
+            mask |= wgpu::ColorWrites::ALPHA;
+        }
+        if mask.is_empty() {
+            wgpu::ColorWrites::ALL
+        } else {
+            mask
+        }
+    }
+}
 
-        write_mask
+impl Into<wgpu::BlendState> for TextureBlend {
+    fn into(self) -> wgpu::BlendState {
+        self.create_wgpu_blend_state()
+    }
+}
+
+impl Into<wgpu::ColorWrites> for TextureBlend {
+    fn into(self) -> wgpu::ColorWrites {
+        self.create_wgpu_color_write_mask()
     }
 }
 
@@ -475,7 +479,7 @@ impl PartialEq for TextureSampler {
     }
 }
 
-#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TextureFormat {
     // Normal 8 bit formats
     /// Red channel only. 8 bit integer per channel. [0, 255] converted to/from float [0, 1] in shader.

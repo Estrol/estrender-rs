@@ -638,10 +638,12 @@ impl RenderPipelineBuilder {
         let pipeline_desc = GraphicsPipelineDesc {
             shaders: shader_binding.shader.clone(),
             entry_point: shader_binding.shader_entry.clone(),
-            render_target: wgpu::TextureFormat::Rgba8UnormSrgb,
+            render_target: vec![(
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                self.blend.clone(),
+                self.color_write_mask.clone(),
+            )],
             depth_stencil: None,
-            blend_state: self.blend.clone(),
-            write_mask: self.color_write_mask.clone(),
             vertex_desc,
             primitive_state,
             bind_group_layout: layout,

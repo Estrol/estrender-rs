@@ -1,4 +1,9 @@
-use crate::{math::Point2, runner::{CursorIcon, Runner, WindowEvent}, utils::ArcRef, window::window_inner::WindowInner};
+use crate::{
+    math::Point2,
+    runner::{CursorIcon, Runner, WindowEvent},
+    utils::ArcRef,
+    window::{WindowError, window_inner::WindowInner},
+};
 
 #[derive(Clone, Debug)]
 pub struct Window {
@@ -12,7 +17,7 @@ impl Window {
         title: String,
         size: Point2,
         pos: Option<Point2>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, WindowError> {
         let parent_id = if let Some(parent) = parent {
             Some(parent.inner.wait_borrow().window_id)
         } else {
@@ -21,7 +26,7 @@ impl Window {
 
         let result = runner.internal_new_window(parent_id, title, size, pos);
         if result.is_err() {
-            return Err(result.err().unwrap());
+            return Err(WindowError::RunnerError(result.unwrap_err()));
         }
 
         let (window_id, proxy) = result.unwrap();
@@ -29,7 +34,7 @@ impl Window {
         let window_pointer = runner.get_window_pointer(window_id);
 
         if window_events.is_none() || window_pointer.is_none() {
-            return Err("Failed to create window!".to_string());
+            return Err(WindowError::WindowNotFound);
         }
 
         let window_events = window_events.unwrap();
@@ -49,9 +54,7 @@ impl Window {
 
         runner.window_events_attributes.push(inner.clone());
 
-        Ok(Self {
-            inner
-        })
+        Ok(Self { inner })
     }
 
     /// Get the window ID of this window.
@@ -174,7 +177,7 @@ impl<'a> WindowBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> Result<Window, String> {
+    pub fn build(self) -> Result<Window, WindowError> {
         Window::new(
             self.runner,
             self.parent_window,
