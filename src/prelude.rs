@@ -68,6 +68,11 @@ pub use super::gpu::{
     }
 };
 
+pub use super::window::{
+    Window,
+    WindowError,
+};
+
 pub use super::math::*;
 
 #[cfg(feature = "software")]
