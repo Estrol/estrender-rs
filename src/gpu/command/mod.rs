@@ -1,24 +1,34 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+//! Command
 
-use wgpu::{CommandEncoder, util::TextureBlitter};
+#[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+use std::sync::atomic::Ordering;
 
-use crate::{dbg_log, gpu::gpu_inner::GPUInner, log, utils::ArcRef};
+use std::sync::{atomic::AtomicBool, Arc};
 
+use crate::utils::ArcRef;
 use super::{
+    GPUInner,
     SwapchainError,
+    texture::{Texture, BlendState},
     buffer::Buffer,
-    texture::{Texture, TextureBlend},
 };
 
 pub(crate) mod renderpass;
-pub use renderpass::*;
-pub(crate) mod drawing;
-pub use drawing::*;
 pub(crate) mod computepass;
-pub use computepass::*;
+pub(crate) mod drawing;
+pub(crate) mod utils;
+
+use renderpass::{
+    RenderPass, RenderPassBuildError, RenderpassBuilder,
+};
+
+use utils::BindGroupType;
+
+use computepass::{ComputePass, ComputePassBuildError};
+use wgpu::util::TextureBlitter;
 
 pub enum PassAttachment {
-    Texture(Texture, TextureBlend),
+    Texture(Texture, BlendState),
 }
 
 #[derive(Clone, Debug)]
@@ -43,7 +53,7 @@ pub enum CommandBufferBuildError {
 pub struct CommandBuffer {
     pub(crate) inner: ArcRef<GPUInner>,
 
-    pub(crate) command: Option<ArcRef<CommandEncoder>>,
+    pub(crate) command: Option<ArcRef<wgpu::CommandEncoder>>,
     pub(crate) on_renderpass: Arc<AtomicBool>,
     pub(crate) on_compute: Arc<AtomicBool>,
 
@@ -55,7 +65,7 @@ impl CommandBuffer {
         let inner_ref = inner.borrow();
         let command =
             inner_ref
-                .get_device()
+                .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Command Encoder"),
                 });
@@ -79,7 +89,7 @@ impl CommandBuffer {
         let inner_ref = inner.borrow();
         let command =
             inner_ref
-                .get_device()
+                .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Command Encoder"),
                 });
@@ -138,7 +148,7 @@ impl CommandBuffer {
                     self.swapchain.set_texture(swapchain);
                 }
                 Err(err) => {
-                    log!("Swapchain error: {}", err);
+                    crate::log!("Swapchain error: {}", err);
                     return Err(RenderPassBuildError::SwapchainError(format!(
                         "Failed to create swapchain: {}",
                         err
@@ -251,14 +261,14 @@ impl CommandBuffer {
         let blitter = {
             let dst_format = dst.inner.borrow().format;
 
-            TextureBlitter::new(gpu_inner.get_device(), dst_format.into())
+            TextureBlitter::new(gpu_inner.device(), dst_format.into())
         };
 
         let src_view = &src.inner.borrow().wgpu_view;
 
         let dst_view = &dst.inner.borrow().wgpu_view;
 
-        blitter.copy(&gpu_inner.get_device(), &mut cmd, src_view, dst_view);
+        blitter.copy(&gpu_inner.device(), &mut cmd, src_view, dst_view);
     }
 
     /// Copies a source texture to a destination texture.
@@ -325,7 +335,7 @@ impl CommandBuffer {
             panic!("Command buffer dropped while still in use");
         });
 
-        inner_ref.get_queue().submit(std::iter::once(cmd.finish()));
+        inner_ref.queue().submit(std::iter::once(cmd.finish()));
 
         if present {
             self.swapchain.present();
@@ -360,7 +370,7 @@ impl CommandBuffer {
                             return Err(SurfaceTextureError::DeviceLost);
                         }
                         _ => {
-                            log!("Swapchain error: {}", err);
+                            crate::log!("Swapchain error: {}", err);
                             return Err(SurfaceTextureError::NotAvailable);
                         }
                     }
@@ -375,8 +385,12 @@ impl CommandBuffer {
 impl Drop for CommandBuffer {
     fn drop(&mut self) {
         if std::thread::panicking() {
-            dbg_log!("Dropping command buffer while panicking");
+            crate::dbg_log!("Dropping command buffer while panicking");
             return;
+        }
+
+        if self.on_renderpass.load(Ordering::Relaxed) || self.on_compute.load(Ordering::Relaxed) {
+            panic!("Command buffer dropped while still in a render pass or compute pass");
         }
 
         self.end(true);

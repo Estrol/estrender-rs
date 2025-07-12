@@ -1,15 +1,27 @@
 //! Drawing, an intermediate mode drawing for some 2D primitives.
 
 use std::{cell::RefCell, collections::HashMap};
+use super::RenderPass;
 
 use crate::{
-    dbg_log, font::{Font, FontManager}, gpu::{gpu_inner::GPUInner, AttachmentConfigurator, Buffer, BufferBuilder, BufferUsage, TextureAtlas}, math::{Color, Point2, RectF, Vector2, Vector3, Vertex}, prelude::{
-        GraphicsShader, GraphicsShaderBuilder, ShaderBindingType, Texture, TextureBuilder, TextureFormat, TextureSampler,
-        TextureUsage,
-    }, utils::ArcRef
+    font::{Font, FontManager}, math::{Color, Point2, RectF, Vector2, Vector3, Vertex}, utils::ArcRef
 };
 
-use super::RenderPass;
+use super::{
+    super::{
+        GPUInner,
+        texture::{
+            atlas::TextureAtlas,
+            Texture, 
+            TextureBuilder, 
+            TextureUsage, 
+            TextureSampler,
+            TextureFormat
+        },
+        shader::{GraphicsShader, GraphicsShaderBuilder},
+        buffer::{Buffer, BufferBuilder, BufferUsage},
+    },
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct DrawingGlobalState {
@@ -221,7 +233,7 @@ impl DrawingContextInner {
         } else {
             #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
             {
-                dbg_log!("Failed to load font: {}", font_path);
+                crate::dbg_log!("Failed to load font: {}", font_path);
             }
         }
     }
@@ -236,7 +248,7 @@ impl DrawingContextInner {
         if name.is_none() {
             #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
             {
-                dbg_log!("Font path is None, cannot set font");
+                crate::dbg_log!("Font path is None, cannot set font");
             }
             return;
         }
@@ -366,7 +378,7 @@ impl DrawingContext {
         if inner.current_font.is_none() {
             #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
             {
-                dbg_log!("No font selected for drawing text");
+                crate::dbg_log!("No font selected for drawing text");
             }
             return;
         }
@@ -1006,7 +1018,7 @@ impl DrawingContext {
                 {
                     let mut fullfiled = false;
                     for binding in shader_ref.reflection.iter() {
-                        use crate::prelude::ShaderReflect;
+                        use super::super::shader::types::{ShaderReflect, ShaderBindingType};
 
                         let bindings = match binding {
                             ShaderReflect::Fragment { bindings, .. } => bindings,
@@ -1048,7 +1060,7 @@ impl DrawingContext {
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         if inner.vertices.is_empty() {
-            dbg_log!(
+            crate::dbg_log!(
                 "DrawingContext::end: No vertices to draw, did you forget to call a drawing function?"
             );
 

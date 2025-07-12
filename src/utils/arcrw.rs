@@ -41,7 +41,7 @@ impl<T> ArcRW<T> {
     }
 
     /// Wait for the read lock to be available, blocking until it can be acquired.
-    /// [DEBUG] In debug mode, this will panic if the read lock is not acquired within 5 seconds.
+    /// In debug mode, this will panic if the read lock is not acquired within 5 seconds.
     pub fn wait_read(&self) -> std::sync::RwLockReadGuard<T> {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         let now = std::time::Instant::now();
@@ -58,7 +58,7 @@ impl<T> ArcRW<T> {
     }
 
     /// Wait for the write lock to be available, blocking until it can be acquired.
-    /// [DEBUG] In debug mode, this will panic if the write lock is not acquired within 5 seconds.
+    /// In debug mode, this will panic if the write lock is not acquired within 5 seconds.
     pub fn wait_write(&self) -> std::sync::RwLockWriteGuard<T> {
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         let now = std::time::Instant::now();

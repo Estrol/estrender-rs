@@ -3,13 +3,13 @@ extern crate est_render;
 use est_render::prelude::*;
 
 fn main() {
-    let mut runner = est_render::create_runner().expect("Failed to create runner");
+    let mut runner = est_render::runner::new().expect("Failed to create runner");
     let mut window = runner
         .create_window("Engine Example", Point2::new(800, 600))
         .build()
         .expect("Failed to create window");
 
-    let adapters = est_render::query_gpu_adapter(Some(&window));
+    let adapters = est_render::gpu::query_gpu_adapter(Some(&window));
     if adapters.is_empty() {
         eprintln!("No GPU adapters found. Exiting.");
         return;
@@ -26,7 +26,7 @@ fn main() {
     }
 
     let adapter = selected_adapter.unwrap();
-    let mut gpu = create_gpu(Some(&mut window))
+    let mut gpu = est_render::gpu::new(Some(&mut window))
         .set_adapter(&adapter)
         .build()
         .expect("Failed to create GPU");

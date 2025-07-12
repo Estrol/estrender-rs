@@ -3,14 +3,14 @@ extern crate est_render;
 use est_render::prelude::*;
 
 fn main() {
-    let mut runner = est_render::create_runner().expect("Failed to create runner");
+    let mut runner = est_render::runner::new().expect("Failed to create runner");
 
     let mut window = runner
         .create_window("Clear Color Example", Point2::new(800, 600))
         .build()
         .expect("Failed to create window");
 
-    let mut gpu = est_render::create_gpu(Some(&mut window))
+    let mut gpu = est_render::gpu::new(Some(&mut window))
         .build()
         .expect("Failed to create GPU");
 
@@ -40,7 +40,7 @@ fn main() {
         if let Ok(mut cmd) = gpu.begin_command() {
             if let Ok(mut gp) = cmd.begin_renderpass() {
                 gp.set_clear_color(Color::BLUEVIOLET);
-                gp.set_blend(0, Some(&TextureBlend::NONE));
+                gp.set_blend(0, Some(&BlendState::NONE));
 
                 if let Some(mut drawing) = gp.begin_drawing() {
                     drawing.set_texture_atlas(Some((&texture_atlas, "example_texture")));

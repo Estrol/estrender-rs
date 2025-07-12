@@ -1,14 +1,54 @@
 use std::collections::HashMap;
 
-use image::GenericImageView;
+use crate::{math::{Point2, RectF}, utils::ArcRef};
 
-use crate::{
-    gpu::{Texture, TextureError, TextureFormat, TextureUsage, gpu_inner::GPUInner},
-    math::{Point2, RectF},
-    utils::ArcRef,
+use super::{
+    super::GPUInner,
+    Texture,
+    TextureError,
+    TextureBuilder,
+    TextureUsage,
+    TextureFormat,
 };
 
-const MAX_WIDTH_SIZE: i32 = 4096; // Maximum size for texture atlas
+/// Represents a texture atlas containing multiple textures
+/// and their UV coordinates
+#[derive(Debug, Clone)]
+pub struct TextureAtlas {
+    pub(crate) texture: Texture,
+    pub(crate) items: HashMap<String, TextureAtlasCoord>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TextureAtlasCoord {
+    pub rect_uv: RectF,
+    pub size: Point2,
+}
+
+impl TextureAtlas {
+    pub(crate) fn new(texture: Texture, items: HashMap<String, TextureAtlasCoord>) -> Self {
+        Self { texture, items }
+    }
+
+    /// Retrieves the UV rectangle and size for a given texture ID
+    pub fn get_id(&self, id: &str) -> Option<(RectF, Point2)> {
+        self.items.get(id).map(|coord| (coord.rect_uv, coord.size))
+    }
+
+    /// Get the texture associated with this atlas
+    pub fn get_texture(&self) -> &Texture {
+        &self.texture
+    }
+
+    /// Get the size of the texture atlas
+    pub fn get_texture_size(&self) -> Point2 {
+        let inner = self.texture.inner.borrow();
+
+        Point2::new(inner.size.x as i32, inner.size.y as i32)
+    }
+}
+
+const MAX_WIDTH_SIZE: i32 = 2048;
 
 #[derive(Debug, Clone)]
 pub struct TextureAtlasBuilder {
@@ -88,6 +128,8 @@ impl TextureAtlasBuilder {
         let mut texture_items = HashMap::new();
 
         for (id, item) in self.items {
+            use image::GenericImageView;
+
             let (texture_data, size) = match item {
                 ItemQueue::File(file) => {
                     if !std::path::Path::new(&file).exists() {
@@ -209,49 +251,12 @@ impl TextureAtlasBuilder {
             TextureFormat::Rgba8Unorm
         };
 
-        let texture = super::TextureBuilder::new(self.gpu)
+        let texture = TextureBuilder::new(self.gpu)
             .set_raw_image(&texture_data, atlas_size, format)
             .set_usage(TextureUsage::Sampler)
             .build()
             .map_err(TextureAtlasBuilderError::TextureCreationError)?;
 
         Ok(TextureAtlas::new(texture, items))
-    }
-}
-
-/// Represents a texture atlas containing multiple textures
-/// and their UV coordinates
-#[derive(Debug, Clone)]
-pub struct TextureAtlas {
-    pub(crate) texture: Texture,
-    pub(crate) items: HashMap<String, TextureAtlasCoord>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TextureAtlasCoord {
-    pub rect_uv: RectF,
-    pub size: Point2,
-}
-
-impl TextureAtlas {
-    pub(crate) fn new(texture: Texture, items: HashMap<String, TextureAtlasCoord>) -> Self {
-        Self { texture, items }
-    }
-
-    /// Retrieves the UV rectangle and size for a given texture ID
-    pub fn get_id(&self, id: &str) -> Option<(RectF, Point2)> {
-        self.items.get(id).map(|coord| (coord.rect_uv, coord.size))
-    }
-
-    /// Get the texture associated with this atlas
-    pub fn get_texture(&self) -> &Texture {
-        &self.texture
-    }
-
-    /// Get the size of the texture atlas
-    pub fn get_texture_size(&self) -> Point2 {
-        let inner = self.texture.inner.borrow();
-
-        Point2::new(inner.size.x as i32, inner.size.y as i32)
     }
 }

@@ -1,8 +1,10 @@
+use winit::{event, event_loop::EventLoopProxy};
+
+#[cfg(feature = "software")]
+use crate::software::PixelBufferInner;
+
 use crate::{
-    math::Point2,
-    runner::{CursorIcon, Runner, WindowEvent},
-    utils::ArcRef,
-    window::{WindowError, window_inner::WindowInner},
+    gpu::GPUInner, math::Point2, runner::{CursorIcon, Handle, Runner, RunnerError, WindowEvent}, utils::{ArcMut, ArcRef}
 };
 
 #[derive(Clone, Debug)]
@@ -186,4 +188,56 @@ impl<'a> WindowBuilder<'a> {
             self.pos,
         )
     }
+}
+
+pub(crate) struct WindowInner {
+    pub window_id: usize,
+    pub window_events: ArcRef<Vec<event::WindowEvent>>,
+    pub window_pointer: Option<ArcMut<Handle>>,
+    pub proxy: EventLoopProxy<WindowEvent>,
+    pub size: Point2,
+
+    pub(crate) graphics: Option<ArcRef<GPUInner>>,
+
+    #[cfg(feature = "software")]
+    pub(crate) pixelbuffer: Option<ArcRef<PixelBufferInner>>,
+}
+
+impl WindowInner {
+    pub fn process_event(&mut self) {
+        for event in self.window_events.wait_borrow_mut().iter() {
+            match event {
+                event::WindowEvent::CloseRequested => {
+                    self.graphics = None;
+                    self.window_pointer = None;
+                }
+                event::WindowEvent::Resized(size) => {
+                    if let Some(gpu) = &self.graphics {
+                        gpu.wait_borrow_mut().resize(*size);
+                    }
+
+                    #[cfg(feature = "software")]
+                    if let Some(softbuffer) = &self.pixelbuffer {
+                        _ = softbuffer.wait_borrow_mut().resize(*size);
+                    }
+
+                    self.size = Point2::from(*size);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RunMode {
+    Poll,
+    ReDraw,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum WindowError {
+    RunnerError(RunnerError),
+    WindowNotFound,
 }

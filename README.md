@@ -1,6 +1,9 @@
 # Estrol Rendering Library
 Easy to use winit, softbuffer & wgpu abstractions
 
+## Status
+The crate still on heavy development, changes between namespaces are expected!
+
 ## Features
 * Abstraction over `winit's Window`, `softbuffer's Pixel Buffer` and `wgpu's GPU Device` creation with simple builder.
 * Support `Swapchain`, `Render Target` and `GPU Compute`.

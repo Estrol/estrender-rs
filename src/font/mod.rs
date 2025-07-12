@@ -8,10 +8,22 @@ use byteorder_lite::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use flate2::bufread::ZlibDecoder;
 
 use crate::{
-    gpu::{gpu_inner::GPUInner, Texture, TextureBuilder, TextureError, TextureFormat, TextureUsage, GPU},
+    gpu::{
+        GPU,
+        GPUInner,
+        texture::{Texture, TextureBuilder, TextureError, TextureFormat, TextureUsage},
+    },
     math::{Point2, Vector2},
     utils::ArcRef,
 };
+
+
+/// Creates a new [FontManager] instance.
+///
+/// This is useful for loading and managing fonts for text rendering.
+pub fn new() -> FontManager {
+    FontManager::new()
+}
 
 mod system;
 

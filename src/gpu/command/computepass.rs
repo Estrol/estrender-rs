@@ -1,8 +1,31 @@
 use std::{collections::HashMap, hash::{DefaultHasher, Hash, Hasher}, sync::{atomic::AtomicBool, Arc}};
 
-use wgpu::CommandEncoder;
+use crate::utils::ArcRef;
 
-use crate::{gpu::{computepass::compute_inner::ComputePassInner, gpu_inner::GPUInner, BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, BufferUsage, ComputePassBuildError, ComputePipeline, ComputePipelineDesc, ComputeShader, ComputeShaderBinding, IntermediateComputeBinding, ShaderBindingType, ShaderReflect}, utils::ArcRef};
+use super::{
+    super::{
+        GPUInner,
+        shader::{
+            ComputeShader,
+            bind_group_manager::BindGroupCreateInfo,
+            BindGroupLayout,
+            types::ShaderReflect,
+            ShaderBindingType,
+        },
+        buffer::{
+            Buffer,
+            BufferUsage
+        },
+        pipeline::{
+            compute::ComputePipeline,
+            manager::ComputePipelineDesc,
+        },
+        command::{
+            BindGroupAttachment,
+            BindGroupType
+        }
+    }
+};
 
 #[derive(Clone, Debug)]
 pub struct ComputePass {
@@ -11,7 +34,11 @@ pub struct ComputePass {
 }
 
 impl ComputePass {
-    pub(crate) fn new(graphics: ArcRef<GPUInner>, cmd: ArcRef<CommandEncoder>, atomic_pass: Arc<AtomicBool>) -> Result<Self, ComputePassBuildError> {
+    pub(crate) fn new(
+        graphics: ArcRef<GPUInner>, 
+        cmd: ArcRef<wgpu::CommandEncoder>, 
+        atomic_pass: Arc<AtomicBool>
+    ) -> Result<Self, ComputePassBuildError> {
         let inner = ComputePassInner {
             cmd,
             shader: None,
@@ -289,7 +316,7 @@ impl ComputePass {
         let queue = ComputePassQueue {
             pipeline,
             bind_group,
-            ty: super::DispatchType::Dispatch { x, y, z },
+            ty: DispatchType::Dispatch { x, y, z },
             push_constant: inner.push_constant.clone(),
             debug: None,
         };
@@ -313,7 +340,7 @@ impl ComputePass {
         let queue = ComputePassQueue {
             pipeline,
             bind_group,
-            ty: super::DispatchType::DispatchIndirect {
+            ty: DispatchType::DispatchIndirect {
                 buffer: buffer.inner.borrow().buffer.clone(),
                 offset,
             },
@@ -515,10 +542,10 @@ impl ComputePass {
             }
 
             match &queue.ty {
-                super::DispatchType::Dispatch { x, y, z } => {
+                DispatchType::Dispatch { x, y, z } => {
                     cpass.dispatch_workgroups(*x, *y, *z);
                 }
-                super::DispatchType::DispatchIndirect { buffer, offset } => {
+                DispatchType::DispatchIndirect { buffer, offset } => {
                     cpass.dispatch_workgroups_indirect(buffer, *offset);
                 }
             }
@@ -538,8 +565,46 @@ impl Drop for ComputePass {
 pub(crate) struct ComputePassQueue {
     pub pipeline: wgpu::ComputePipeline,
     pub bind_group: Vec<(u32, wgpu::BindGroup)>,
-    pub ty: super::DispatchType,
+    pub ty: DispatchType,
     pub push_constant: Option<Vec<u8>>,
 
     pub debug: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ComputePassInner {
+    pub cmd: ArcRef<wgpu::CommandEncoder>,
+    pub shader: Option<ComputeShaderBinding>,
+    pub atomic_pass: Arc<AtomicBool>,
+
+    pub queues: Vec<ComputePassQueue>,
+    pub attachments: Vec<BindGroupAttachment>,
+    pub push_constant: Option<Vec<u8>>,
+
+    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+    pub reflection: Option<ShaderReflect>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum DispatchType {
+    Dispatch { x: u32, y: u32, z: u32 },
+    DispatchIndirect { buffer: wgpu::Buffer, offset: u64 },
+}
+
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct IntermediateComputeBinding {
+    pub shader: wgpu::ShaderModule,
+    pub layout: Vec<BindGroupLayout>,
+    pub entry_point: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ComputeShaderBinding {
+    Intermediate(IntermediateComputeBinding),
+    Pipeline(ComputePipeline),
+}
+
+#[derive(Clone, Debug)]
+pub enum ComputePassBuildError {
+    None
 }

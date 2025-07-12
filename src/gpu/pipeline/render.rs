@@ -3,15 +3,32 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
 };
 
-use crate::{
-    gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, GraphicsPipelineDesc,
-        GraphicsShader, IndexBufferSize, IntermediateRenderPipeline, ShaderBindingType,
-        ShaderCullMode, ShaderFrontFace, ShaderPollygonMode, ShaderReflect, ShaderTopology,
-        ShaderType, Texture, TextureBlend, TextureSampler, VertexAttributeLayout,
-        gpu_inner::GPUInner,
-    },
-    utils::ArcRef,
+use crate::utils::ArcRef;
+
+use super::{
+    manager::{GraphicsPipelineDesc, VertexAttributeLayout},
+    super::{
+        GPUInner,
+        texture::{Texture, TextureSampler, BlendState},
+        shader::{
+            bind_group_manager::BindGroupCreateInfo,
+            GraphicsShader,
+            IndexBufferSize,
+            ShaderBindingType,
+            ShaderCullMode,
+            ShaderFrontFace,
+            ShaderPollygonMode,
+            ShaderTopology,
+            graphics::GraphicsShaderType,
+            types::ShaderReflect
+        },
+        buffer::Buffer,
+        command::{
+            BindGroupAttachment,
+            utils::BindGroupType,
+            renderpass::IntermediateRenderPipeline,
+        },
+    }
 };
 
 #[derive(Debug, Clone, Hash)]
@@ -44,7 +61,7 @@ impl RenderPipelineBuilder {
     }
 
     #[inline]
-    pub fn set_blend(mut self, blend: Option<&TextureBlend>) -> Self {
+    pub fn set_blend(mut self, blend: Option<&BlendState>) -> Self {
         match blend {
             Some(blend) => {
                 self.blend = Some(blend.clone().into());
@@ -78,12 +95,11 @@ impl RenderPipelineBuilder {
             Some(shader) => {
                 let shader_inner = shader.inner.borrow();
                 let (vertex_shader, fragment_shader) = match &shader_inner.ty {
-                    ShaderType::GraphicsSplit {
+                    GraphicsShaderType::GraphicsSplit {
                         vertex_module,
                         fragment_module,
                     } => (vertex_module.clone(), fragment_module.clone()),
-                    ShaderType::GraphicsSingle { module } => (module.clone(), module.clone()),
-                    _ => panic!("Shader must be a graphics shader"),
+                    GraphicsShaderType::GraphicsSingle { module } => (module.clone(), module.clone()),
                 };
 
                 let layout = shader_inner.bind_group_layouts.clone();
@@ -170,7 +186,7 @@ impl RenderPipelineBuilder {
                         group,
                         binding,
                         attachment: BindGroupType::Sampler(
-                            sampler.make_wgpu(gpu_inner.get_device()),
+                            sampler.make_wgpu(gpu_inner.device()),
                         ),
                     }
                 };

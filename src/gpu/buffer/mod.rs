@@ -2,9 +2,16 @@
 
 use std::cell::RefMut;
 
-use crate::{gpu::gpu_inner::GPUInner, utils::ArcRef};
+// use crate::{gpu::gpu_inner::GPUInner, utils::ArcRef};
 
-use super::command::CommandBuffer;
+// use super::command::CommandBuffer;
+
+use crate::utils::ArcRef;
+
+use super::{
+    command::CommandBuffer,
+    GPUInner,
+};
 
 /// Represents the usage flags for a GPU buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -271,7 +278,7 @@ impl Buffer {
         let graphics_ref = self.graphics.borrow();
         let mut encoder =
             graphics_ref
-                .get_device()
+                .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Buffer Write Command Encoder"),
                 });
@@ -279,9 +286,9 @@ impl Buffer {
         self.internal_write_cmd(src, &mut encoder);
 
         graphics_ref
-            .get_queue()
+            .queue()
             .submit(std::iter::once(encoder.finish()));
-        _ = graphics_ref.get_device().poll(wgpu::PollType::Wait);
+        _ = graphics_ref.device().poll(wgpu::PollType::Wait);
     }
 
     /// Writes the contents of the source buffer to this buffer using a command buffer.
@@ -386,7 +393,7 @@ impl Buffer {
 
         let mut encoder =
             graphics_ref
-                .get_device()
+                .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Buffer Write Raw Command Encoder"),
                 });
@@ -394,10 +401,10 @@ impl Buffer {
         self.internal_write_raw_cmd(data, &mut encoder);
 
         graphics_ref
-            .get_queue()
+            .queue()
             .submit(std::iter::once(encoder.finish()));
 
-        _ = graphics_ref.get_device().poll(wgpu::PollType::Wait);
+        _ = graphics_ref.device().poll(wgpu::PollType::Wait);
     }
 
     /// Writes raw data to the buffer using a command buffer, useful for writing data during a render pass.
@@ -545,7 +552,7 @@ impl Buffer {
 
             let mut encoder =
                 graphics_ref
-                    .get_device()
+                    .device()
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("Buffer Read Command Encoder"),
                     });
@@ -559,10 +566,10 @@ impl Buffer {
             );
 
             graphics_ref
-                .get_queue()
+                .queue()
                 .submit(std::iter::once(encoder.finish()));
 
-            _ = graphics_ref.get_device().poll(wgpu::PollType::Wait);
+            _ = graphics_ref.device().poll(wgpu::PollType::Wait);
 
             let result = {
                 let mapped_buffer = buffer.slice(..inner.size).get_mapped_range();

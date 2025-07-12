@@ -3,13 +3,25 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
 };
 
-use crate::{
-    gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, ComputePipelineDesc,
-        ComputeShader, IntermediateComputeBinding, ShaderBindingType, ShaderReflect, Texture,
-        TextureSampler, gpu_inner::GPUInner,
+use crate::utils::ArcRef;
+
+use super::{
+    manager::ComputePipelineDesc,
+    super::{
+        GPUInner,
+        texture::{Texture, TextureSampler},
+        buffer::Buffer,
+        command::{
+            BindGroupAttachment,
+            utils::BindGroupType,
+            computepass::IntermediateComputeBinding
+        },
+        shader::{
+            bind_group_manager::BindGroupCreateInfo,
+            types::{ShaderReflect, ShaderBindingType},
+            compute::ComputeShader,
+        },
     },
-    utils::ArcRef,
 };
 
 #[derive(Debug, Clone, Hash)]
@@ -84,7 +96,7 @@ impl ComputePipelineBuilder {
                         group,
                         binding,
                         attachment: BindGroupType::Sampler(
-                            sampler.make_wgpu(gpu_inner.get_device()),
+                            sampler.make_wgpu(gpu_inner.device()),
                         ),
                     }
                 };

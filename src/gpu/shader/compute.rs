@@ -2,9 +2,14 @@ use std::collections::HashMap;
 
 use wgpu::{BindingType, SamplerBindingType, naga::front::wgsl};
 
-use crate::{gpu::gpu_inner::GPUInner, utils::ArcRef};
-
-use super::{BindGroupLayout, ShaderBindingType, ShaderReflect, StorageAccess, parse};
+use crate::utils::ArcRef;
+use super::{
+    super::GPUInner,
+    types::{
+        ShaderReflect, BindGroupLayout,
+        ShaderBindingType, StorageAccess,
+    }
+};
 
 pub struct ComputeShaderBuilder {
     pub(crate) graphics: ArcRef<GPUInner>,
@@ -65,7 +70,7 @@ impl ComputeShader {
         }
 
         let module = module.unwrap();
-        let reflect = parse(module);
+        let reflect = super::reflection::parse(module);
 
         if reflect.is_err() {
             return Err(format!("Failed to reflect shader: {:?}", reflect.err()));
@@ -74,7 +79,7 @@ impl ComputeShader {
         let reflect = reflect.unwrap();
 
         let graphics_ref = graphics.borrow();
-        let device_ref = graphics_ref.get_device();
+        let device_ref = graphics_ref.device();
 
         let shader = device_ref.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,

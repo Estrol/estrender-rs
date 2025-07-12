@@ -7,7 +7,7 @@ use wgpu::naga::{
     VectorSize,
 };
 
-use super::{
+use super::types::{
     ShaderBindingInfo, ShaderBindingType, ShaderReflect, StorageAccess, VertexInputReflection,
     VertexInputType,
 };

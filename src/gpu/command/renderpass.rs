@@ -1,30 +1,45 @@
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::HashMap, hash::{DefaultHasher, Hash, Hasher}, ops::Range, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 
-use wgpu::{ColorWrites, CommandEncoder};
-
-#[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-use crate::gpu::BufferUsage;
 use crate::{
-    gpu::{
-        BindGroupAttachment, BindGroupCreateInfo, BindGroupType, Buffer, DrawCallType,
-        DrawingContext, GraphicsPipelineDesc, GraphicsShader, IndexBufferSize,
-        IntermediateRenderPipeline, RenderPassQueue, RenderPipeline, RenderShaderBinding,
-        SampleCount, ShaderBindingType, ShaderCullMode, ShaderFrontFace, ShaderPollygonMode,
-        ShaderReflect, ShaderTopology, ShaderType, Texture, TextureBlend, TextureSampler,
-        TextureUsage, VertexAttributeLayout, gpu_inner::GPUInner,
-        renderpass_inner::RenderPassInner,
-    },
     math::{Color, Point2, RectF},
     utils::ArcRef,
 };
+
+use super::{
+    utils::BindGroupType,
+    drawing::DrawingContext,
+    super::{
+        GPUInner,
+        texture::{
+            Texture, 
+            BlendState, 
+            TextureSampler, 
+            TextureUsage,
+            TextureFormat, 
+            SampleCount
+        },
+        buffer::{Buffer, BufferUsage},
+        pipeline::{
+            render::RenderPipeline,
+            manager::{VertexAttributeLayout, GraphicsPipelineDesc},
+        },
+        shader::{
+            graphics::{GraphicsShader, GraphicsShaderType},
+            bind_group_manager::BindGroupCreateInfo,
+            types::ShaderReflect,
+            BindGroupLayout,
+            ShaderTopology,
+            ShaderCullMode,
+            ShaderFrontFace,
+            ShaderPollygonMode,
+            IndexBufferSize,
+            ShaderBindingType,
+        },
+        command::{BindGroupAttachment, SurfaceTexture},
+    }
+};
+
+
 /// Represents a render pass in the graphics pipeline.
 ///
 /// Renderpass support intermediate mode which includes setting up shaders, buffers, and attachments.
@@ -67,7 +82,7 @@ pub struct RenderPass {
 impl RenderPass {
     pub(crate) fn new(
         graphics: ArcRef<GPUInner>,
-        cmd: ArcRef<CommandEncoder>,
+        cmd: ArcRef<wgpu::CommandEncoder>,
         atomic_pass: Arc<AtomicBool>,
     ) -> Self {
         let inner = RenderPassInner {
@@ -118,7 +133,7 @@ impl RenderPass {
     }
 
     #[inline]
-    pub fn set_blend(&mut self, index: usize, blend: Option<&TextureBlend>) {
+    pub fn set_blend(&mut self, index: usize, blend: Option<&BlendState>) {
         let mut inner = self.inner.borrow_mut();
 
         match inner.render_targets.get_mut(index) {
@@ -128,7 +143,7 @@ impl RenderPass {
                     target.write_mask = Some(blend.create_wgpu_color_write_mask());
                 } else {
                     target.blend = None;
-                    target.write_mask = Some(ColorWrites::COLOR);
+                    target.write_mask = Some(wgpu::ColorWrites::COLOR);
                 }
             }
             None => {
@@ -138,7 +153,7 @@ impl RenderPass {
     }
 
     #[inline]
-    pub fn get_blend(&self, index: usize) -> Option<TextureBlend> {
+    pub fn get_blend(&self, index: usize) -> Option<BlendState> {
         let inner = self.inner.borrow();
 
         match inner.render_targets.get(index) {
@@ -146,7 +161,7 @@ impl RenderPass {
                 let state = target.blend.clone();
                 let color_write_mask = target.write_mask.clone();
 
-                Some(TextureBlend::from_wgpu(state, color_write_mask))
+                Some(BlendState::from_wgpu(state, color_write_mask))
             }
             None => None,
         }
@@ -251,12 +266,11 @@ impl RenderPass {
             Some(shader) => {
                 let shader_inner = shader.inner.borrow();
                 let (vertex_shader, fragment_shader) = match &shader_inner.ty {
-                    ShaderType::GraphicsSplit {
+                    GraphicsShaderType::GraphicsSplit {
                         vertex_module,
                         fragment_module,
                     } => (vertex_module.clone(), fragment_module.clone()),
-                    ShaderType::GraphicsSingle { module } => (module.clone(), module.clone()),
-                    _ => panic!("Shader must be a graphics shader"),
+                    GraphicsShaderType::GraphicsSingle { module } => (module.clone(), module.clone()),
                 };
 
                 let layout = shader_inner.bind_group_layouts.clone();
@@ -375,8 +389,6 @@ impl RenderPass {
 
         #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
         {
-            use crate::gpu::ShaderBindingType;
-
             if inner.shader.is_none() {
                 panic!("Shader is not set");
             }
@@ -683,6 +695,220 @@ impl RenderPass {
             }
             None => {
                 self.set_push_constants(None);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_sampler(
+        &mut self,
+        group: u32,
+        binding: u32,
+        sampler: Option<&TextureSampler>,
+    ) {
+        match sampler {
+            Some(sampler) => {
+                let inner = self.graphics.borrow();
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Sampler(sampler.make_wgpu(inner.device())),
+                };
+
+                drop(inner);
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_texture(&mut self, group: u32, binding: u32, texture: Option<&Texture>) {
+        match texture {
+            Some(texture) => {
+                let inner = texture.inner.borrow();
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Texture(inner.wgpu_view.clone()),
+                };
+
+                drop(inner);
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_texture_storage(
+        &mut self,
+        group: u32,
+        binding: u32,
+        texture: Option<&Texture>,
+    ) {
+        match texture {
+            Some(texture) => {
+                let inner = texture.inner.borrow();
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::TextureStorage(inner.wgpu_view.clone()),
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_uniform(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
+        match buffer {
+            Some(buffer) => {
+                let inner = buffer.inner.borrow();
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Uniform(inner.buffer.clone()),
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_uniform_vec<T>(&mut self, group: u32, binding: u32, buffer: Option<Vec<T>>)
+    where
+        T: bytemuck::Pod + bytemuck::Zeroable,
+    {
+        match buffer {
+            Some(buffer) => {
+                let mut inner = self.graphics.borrow_mut();
+
+                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Uniform(buffer),
+                };
+
+                drop(inner);
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_uniform_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
+    where
+        T: bytemuck::Pod + bytemuck::Zeroable,
+    {
+        match buffer {
+            Some(buffer) => {
+                let mut inner = self.graphics.borrow_mut();
+
+                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Uniform(buffer),
+                };
+
+                drop(inner);
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_storage(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
+        match buffer {
+            Some(buffer) => {
+                let inner = buffer.inner.borrow();
+
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Storage(inner.buffer.clone()),
+                };
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_storage_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
+    where
+        T: bytemuck::Pod + bytemuck::Zeroable,
+    {
+        match buffer {
+            Some(buffer) => {
+                let mut inner = self.graphics.borrow_mut();
+
+                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Storage(buffer),
+                };
+
+                drop(inner);
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn set_attachment_storage_vec<T>(&mut self, group: u32, binding: u32, buffer: Option<Vec<T>>)
+    where
+        T: bytemuck::Pod + bytemuck::Zeroable,
+    {
+        match buffer {
+            Some(buffer) => {
+                let mut inner = self.graphics.borrow_mut();
+
+                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
+                let attachment = BindGroupAttachment {
+                    group,
+                    binding,
+                    attachment: BindGroupType::Storage(buffer),
+                };
+
+                drop(inner);
+
+                self.insert_or_replace_attachment(group, binding, attachment);
+            }
+            None => {
+                self.remove_attachment(group, binding);
             }
         }
     }
@@ -1248,222 +1474,6 @@ impl RenderPass {
     }
 }
 
-impl AttachmentConfigurator for RenderPass {
-    #[inline]
-    fn set_attachment_sampler(
-        &mut self,
-        group: u32,
-        binding: u32,
-        sampler: Option<&TextureSampler>,
-    ) {
-        match sampler {
-            Some(sampler) => {
-                let inner = self.graphics.borrow();
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Sampler(sampler.make_wgpu(inner.get_device())),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_texture(&mut self, group: u32, binding: u32, texture: Option<&Texture>) {
-        match texture {
-            Some(texture) => {
-                let inner = texture.inner.borrow();
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Texture(inner.wgpu_view.clone()),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_texture_storage(
-        &mut self,
-        group: u32,
-        binding: u32,
-        texture: Option<&Texture>,
-    ) {
-        match texture {
-            Some(texture) => {
-                let inner = texture.inner.borrow();
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::TextureStorage(inner.wgpu_view.clone()),
-                };
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_uniform(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
-        match buffer {
-            Some(buffer) => {
-                let inner = buffer.inner.borrow();
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Uniform(inner.buffer.clone()),
-                };
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_uniform_vec<T>(&mut self, group: u32, binding: u32, buffer: Option<Vec<T>>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        match buffer {
-            Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
-
-                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Uniform(buffer),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_uniform_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        match buffer {
-            Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
-
-                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Uniform(buffer),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_storage(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>) {
-        match buffer {
-            Some(buffer) => {
-                let inner = buffer.inner.borrow();
-
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Storage(inner.buffer.clone()),
-                };
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_storage_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        match buffer {
-            Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
-
-                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Storage(buffer),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-
-    #[inline]
-    fn set_attachment_storage_vec<T>(&mut self, group: u32, binding: u32, buffer: Option<Vec<T>>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable,
-    {
-        match buffer {
-            Some(buffer) => {
-                let mut inner = self.graphics.borrow_mut();
-
-                let buffer = inner.create_buffer_with(&buffer, wgpu::BufferUsages::COPY_DST);
-                let attachment = BindGroupAttachment {
-                    group,
-                    binding,
-                    attachment: BindGroupType::Storage(buffer),
-                };
-
-                drop(inner);
-
-                self.insert_or_replace_attachment(group, binding, attachment);
-            }
-            None => {
-                self.remove_attachment(group, binding);
-            }
-        }
-    }
-}
-
 impl Drop for RenderPass {
     fn drop(&mut self) {
         if std::thread::panicking() {
@@ -1474,32 +1484,403 @@ impl Drop for RenderPass {
     }
 }
 
-pub trait AttachmentConfigurator {
-    fn set_attachment_texture(&mut self, group: u32, binding: u32, texture: Option<&Texture>);
-    fn set_attachment_texture_storage(
-        &mut self,
-        group: u32,
-        binding: u32,
-        texture: Option<&Texture>,
-    );
-    fn set_attachment_sampler(
-        &mut self,
-        group: u32,
-        binding: u32,
-        sampler: Option<&TextureSampler>,
-    );
-    fn set_attachment_uniform(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>);
-    fn set_attachment_uniform_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable;
-    fn set_attachment_uniform_vec<T>(&mut self, group: u32, binding: u32, buffer: Option<Vec<T>>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable;
-    fn set_attachment_storage(&mut self, group: u32, binding: u32, buffer: Option<&Buffer>);
-    fn set_attachment_storage_raw<T>(&mut self, group: u32, binding: u32, buffer: Option<&[T]>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable;
-    fn set_attachment_storage_vec<T>(&mut self, group: u32, binding: u32, buffer: Option<Vec<T>>)
-    where
-        T: bytemuck::Pod + bytemuck::Zeroable;
+#[derive(Debug, Clone)]
+pub(crate) struct RenderpassRenderTarget {
+    pub view: wgpu::TextureView,
+    pub format: wgpu::TextureFormat,
+    pub blend: Option<wgpu::BlendState>,
+    pub write_mask: Option<wgpu::ColorWrites>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RenderPassInner {
+    pub cmd: ArcRef<wgpu::CommandEncoder>,
+    pub atomic_pass: Arc<AtomicBool>,
+
+    pub render_targets: Vec<RenderpassRenderTarget>,
+    pub depth_target: Option<wgpu::TextureView>,
+    pub depth_target_format: Option<wgpu::TextureFormat>,
+
+    pub surface_size: Point2,
+
+    pub multi_sample_target: Vec<wgpu::TextureView>,
+    pub multi_sample_count: Option<u32>,
+
+    pub clear_color: Option<Color>,
+    pub viewport: Option<(RectF, f32, f32)>,
+    pub scissor: Option<RectF>,
+
+    pub vertex: Option<wgpu::Buffer>,
+    pub index: Option<wgpu::Buffer>,
+
+    pub shader: Option<RenderShaderBinding>,
+    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+    pub shader_reflection: Option<Vec<ShaderReflect>>,
+
+    pub attachments: Vec<BindGroupAttachment>,
+    pub push_constant: Option<Vec<u8>>,
+
+    pub queues: Vec<RenderPassQueue>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RenderpassAttachment<'a> {
+    SurfaceTexture(&'a SurfaceTexture),
+    Texture(&'a Texture),
+}
+
+#[derive(Clone, Debug)]
+pub struct RenderpassBuilder<'a> {
+    gpu: ArcRef<GPUInner>,
+    cmd: ArcRef<wgpu::CommandEncoder>,
+    atomic_pass: Arc<AtomicBool>,
+
+    color_attachments: Vec<(RenderpassAttachment<'a>, Option<BlendState>)>,
+    msaa_attachments: Vec<&'a Texture>,
+    depth_attachment: Option<&'a Texture>,
+}
+
+impl<'a> RenderpassBuilder<'a> {
+    pub(crate) fn new(
+        gpu: ArcRef<GPUInner>,
+        cmd: ArcRef<wgpu::CommandEncoder>,
+        atomic_pass: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            gpu,
+            cmd,
+            atomic_pass,
+
+            color_attachments: Vec::new(),
+            msaa_attachments: Vec::new(),
+            depth_attachment: None,
+        }
+    }
+
+    /// Add swapchain's SurfaceTexture color attachment.
+    pub fn add_surface_color_attachment(
+        mut self,
+        surface: &'a SurfaceTexture,
+        blend: Option<&BlendState>,
+    ) -> Self {
+        self.color_attachments.push((
+            RenderpassAttachment::SurfaceTexture(surface),
+            blend.cloned(),
+        ));
+
+        self
+    }
+
+    pub fn add_color_attachment(
+        mut self,
+        texture: &'a Texture,
+        blend: Option<&BlendState>,
+    ) -> Self {
+        self.color_attachments
+            .push((RenderpassAttachment::Texture(texture), blend.cloned()));
+
+        self
+    }
+
+    pub fn add_msaa_attachment(mut self, texture: &'a Texture) -> Self {
+        self.msaa_attachments.push(texture);
+
+        self
+    }
+
+    pub fn set_depth_attachment(mut self, texture: &'a Texture) -> Self {
+        self.depth_attachment = Some(texture);
+
+        self
+    }
+
+    pub fn build(self) -> Result<RenderPass, RenderPassBuildError> {
+        let mut surface_size = None;
+
+        let mut color_attachments = Vec::with_capacity(self.color_attachments.len());
+        for (attachment, blend) in self.color_attachments {
+            let (view, format, size) = match attachment {
+                RenderpassAttachment::SurfaceTexture(surface_texture) => {
+                    let view = surface_texture.get_view();
+                    let format = surface_texture.get_format();
+                    let size = surface_texture.get_size();
+
+                    (view, format, Point2::new(size.width, size.height))
+                }
+                RenderpassAttachment::Texture(texture) => {
+                    let texture_inner = texture.inner.borrow();
+
+                    if !texture_inner
+                        .usages
+                        .contains(TextureUsage::RenderAttachment)
+                    {
+                        return Err(RenderPassBuildError::ColorAttachmentNotRenderTarget);
+                    }
+
+                    if texture_inner.size.x == 0 || texture_inner.size.y == 0 {
+                        return Err(RenderPassBuildError::MismatchedAttachmentSize(
+                            Point2::new(0.0, 0.0),
+                            texture_inner.size,
+                        ));
+                    }
+
+                    if texture_inner.sample_count != SampleCount::SampleCount1 {
+                        return Err(RenderPassBuildError::ColorAttachmentMultiSampled);
+                    }
+
+                    (
+                        texture_inner.wgpu_view.clone(),
+                        texture_inner.format.into(),
+                        texture_inner.size,
+                    )
+                }
+            };
+
+            if surface_size.is_some() {
+                let surface_size = surface_size.unwrap();
+                if surface_size != size {
+                    return Err(RenderPassBuildError::MismatchedAttachmentSize(
+                        surface_size,
+                        size,
+                    ));
+                }
+            }
+
+            if surface_size.is_none() {
+                surface_size = Some(size);
+            }
+
+            color_attachments.push(RenderpassRenderTarget {
+                view,
+                format,
+                blend: blend.map(|b| b.create_wgpu_blend_state()),
+                write_mask: blend.map(|b| b.create_wgpu_color_write_mask()),
+            });
+        }
+
+        let mut multi_sample_target = Vec::with_capacity(self.msaa_attachments.len());
+        let mut multi_sample_count = None;
+
+        for msaa_texture in self.msaa_attachments {
+            let texture_inner = msaa_texture.inner.borrow();
+
+            if !texture_inner
+                .usages
+                .contains(TextureUsage::RenderAttachment)
+            {
+                return Err(RenderPassBuildError::MsaaTextureNotRenderAttachment);
+            }
+
+            if texture_inner.sample_count == SampleCount::SampleCount1 {
+                return Err(RenderPassBuildError::MsaaTextureNotMultiSampled);
+            }
+
+            if texture_inner.size.x == 0 || texture_inner.size.y == 0 {
+                return Err(RenderPassBuildError::MsaaTextureInvalidSize(Point2::new(
+                    0.0, 0.0,
+                )));
+            }
+
+            if surface_size.is_some() {
+                let surface_size = surface_size.unwrap();
+                if surface_size != texture_inner.size {
+                    return Err(RenderPassBuildError::MismatchedAttachmentSize(
+                        surface_size,
+                        texture_inner.size,
+                    ));
+                }
+            }
+
+            let sample_count: u32 = texture_inner.sample_count.into();
+
+            if multi_sample_count.is_some() && multi_sample_count.unwrap() != sample_count {
+                return Err(RenderPassBuildError::MismatchedAttachmentSampleCount(
+                    multi_sample_count.unwrap(),
+                    sample_count,
+                ));
+            }
+
+            if multi_sample_count.is_none() {
+                multi_sample_count = Some(sample_count);
+            }
+
+            multi_sample_target.push(texture_inner.wgpu_view.clone());
+        }
+
+        let mut depth_view = None;
+        let mut depth_format = None;
+
+        if let Some(depth_texture) = self.depth_attachment {
+            let texture_inner = depth_texture.inner.borrow();
+
+            if !texture_inner
+                .usages
+                .contains(TextureUsage::RenderAttachment)
+            {
+                return Err(RenderPassBuildError::DepthTextureNotRenderAttachment);
+            }
+
+            if texture_inner.size.x == 0 || texture_inner.size.y == 0 {
+                return Err(RenderPassBuildError::DepthTextureInvalidSize(Point2::new(
+                    0.0, 0.0,
+                )));
+            }
+
+            if texture_inner.format != TextureFormat::Depth32Float
+                && texture_inner.format != TextureFormat::Depth24PlusStencil8
+            {
+                return Err(RenderPassBuildError::DepthTextureFormatNotSupported(
+                    texture_inner.format,
+                ));
+            }
+
+            if surface_size.is_some() {
+                let surface_size = surface_size.unwrap();
+                if surface_size != texture_inner.size {
+                    return Err(RenderPassBuildError::MismatchedAttachmentSize(
+                        surface_size,
+                        texture_inner.size,
+                    ));
+                }
+            }
+
+            if surface_size.is_none() {
+                surface_size = Some(texture_inner.size);
+            }
+
+            depth_view = Some(texture_inner.wgpu_view.clone());
+            depth_format = Some(texture_inner.format.into());
+        }
+
+        if surface_size.is_none() {
+            return Err(RenderPassBuildError::NoColorOrDepthAttachment);
+        }
+
+        let renderpass = RenderPass::new(self.gpu, self.cmd, self.atomic_pass);
+        {
+            let mut inner = renderpass.inner.borrow_mut();
+
+            inner.render_targets = color_attachments;
+            inner.multi_sample_target = multi_sample_target;
+            inner.multi_sample_count = multi_sample_count;
+            inner.depth_target = depth_view;
+            inner.depth_target_format = depth_format;
+            inner.surface_size = surface_size.unwrap();
+        }
+
+        Ok(renderpass)
+    }
+}
+
+pub enum RenderPassBuildError {
+    NoColorOrDepthAttachment,
+    ColorAttachmentNotRenderTarget,
+    ColorAttachmentMultiSampled,
+    MismatchedAttachmentCount(usize, usize),
+    MismatchedAttachmentSize(Point2, Point2),
+    MismatchedAttachmentSampleCount(u32, u32),
+    MismatchedAttachmentFormat(TextureFormat, TextureFormat),
+    MsaaTextureNotMultiSampled,
+    MsaaTextureNotRenderAttachment,
+    MsaaTextureInvalidSize(Point2),
+    DepthTextureNotRenderAttachment,
+    DepthTextureInvalidSize(Point2),
+    DepthTextureFormatNotSupported(TextureFormat),
+    SwapchainError(String),
+}
+
+impl std::fmt::Display for RenderPassBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderPassBuildError::NoColorOrDepthAttachment => write!(f, "No color attachment provided"),
+            RenderPassBuildError::ColorAttachmentNotRenderTarget => {
+                write!(f, "Color attachment is not a render target")
+            }
+            RenderPassBuildError::ColorAttachmentMultiSampled => {
+                write!(f, "Color attachment is multi-sampled")
+            }
+            RenderPassBuildError::MismatchedAttachmentCount(expected, actual) => {
+                write!(f, "Expected {} attachments, but got {}", expected, actual)
+            }
+            RenderPassBuildError::MismatchedAttachmentSize(expected, actual) => write!(
+                f,
+                "Expected attachment size {:?}, but got {:?}",
+                expected, actual
+            ),
+            RenderPassBuildError::MismatchedAttachmentSampleCount(expected, actual) => {
+                write!(f, "Expected sample count {}, but got {}", expected, actual)
+            }
+            RenderPassBuildError::MismatchedAttachmentFormat(expected, actual) => {
+                write!(f, "Expected format {:?}, but got {:?}", expected, actual)
+            }
+            RenderPassBuildError::MsaaTextureNotMultiSampled => {
+                write!(f, "MSAA texture is not multi-sampled")
+            }
+            RenderPassBuildError::MsaaTextureNotRenderAttachment => {
+                write!(f, "MSAA texture is not a render attachment")
+            }
+            RenderPassBuildError::MsaaTextureInvalidSize(size) => {
+                write!(f, "MSAA texture has invalid size {:?}", size)
+            }
+            RenderPassBuildError::DepthTextureNotRenderAttachment => {
+                write!(f, "Depth texture is not a render attachment")
+            }
+            RenderPassBuildError::DepthTextureInvalidSize(size) => {
+                write!(f, "Depth texture has invalid size {:?}", size)
+            }
+            RenderPassBuildError::DepthTextureFormatNotSupported(format) => {
+                write!(f, "Depth texture format {:?} is not supported", format)
+            }
+            RenderPassBuildError::SwapchainError(err) => write!(f, "Swapchain error: {}", err),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct IntermediateRenderPipeline {
+    pub shader: (wgpu::ShaderModule, wgpu::ShaderModule),
+    pub vertex_attribute: (u64, Vec<wgpu::VertexAttribute>),
+    pub shader_entry: (String, String),
+    pub layout: Vec<BindGroupLayout>,
+    pub topology: ShaderTopology,
+    pub cull_mode: Option<ShaderCullMode>,
+    pub front_face: ShaderFrontFace,
+    pub polygon_mode: ShaderPollygonMode,
+    pub index_format: Option<IndexBufferSize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RenderPassQueue {
+    pub pipeline: wgpu::RenderPipeline,
+    pub bind_group: Vec<(u32, wgpu::BindGroup)>,
+
+    pub vbo: Option<wgpu::Buffer>,
+    pub ibo: Option<wgpu::Buffer>,
+    pub itype: Option<wgpu::IndexFormat>,
+
+    pub viewport: Option<(RectF, f32, f32)>,
+    pub scissor: Option<RectF>,
+
+    pub ty: DrawCallType,
+    pub push_constant: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RenderShaderBinding {
+    Intermediate(IntermediateRenderPipeline),
+    Pipeline(RenderPipeline),
+}
+
+#[derive(Debug, Clone)]
+pub enum DrawCallType {
+    Direct {
+        ranges: Range<u32>,
+        vertex_offset: i32,
+        num_of_instances: u32,
+    },
+
+    InDirect {
+        buffer: wgpu::Buffer,
+        offset: u64,
+    },
 }

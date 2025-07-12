@@ -74,7 +74,7 @@ pub enum BlendFactor {
 }
 
 #[derive(Clone, Debug, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TextureBlend {
+pub struct BlendState {
     pub color_blend: BlendOperation,
     pub alpha_blend: BlendOperation,
     pub color_src_factor: BlendFactor,
@@ -84,7 +84,7 @@ pub struct TextureBlend {
     pub color_blend_constant: [u32; 4],
 }
 
-impl TextureBlend {
+impl BlendState {
     pub fn new(
         color_blend: BlendOperation,
         alpha_blend: BlendOperation,
@@ -293,13 +293,13 @@ impl TextureBlend {
     }
 }
 
-impl Into<wgpu::BlendState> for TextureBlend {
+impl Into<wgpu::BlendState> for BlendState {
     fn into(self) -> wgpu::BlendState {
         self.create_wgpu_blend_state()
     }
 }
 
-impl Into<wgpu::ColorWrites> for TextureBlend {
+impl Into<wgpu::ColorWrites> for BlendState {
     fn into(self) -> wgpu::ColorWrites {
         self.create_wgpu_color_write_mask()
     }

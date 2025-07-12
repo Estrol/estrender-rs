@@ -1,6 +1,8 @@
-use crate::{dbg_log, font::FontStyle};
-
-use super::FontInfo;
+// use crate::{dbg_log, font_::FontStyle};
+use super::{
+    FontInfo,
+    FontStyle,
+};
 
 pub fn search_system_font() -> Vec<FontInfo> {
     // Determine system font directories based on OS
@@ -52,9 +54,9 @@ pub fn search_system_font() -> Vec<FontInfo> {
     }
 
     if fonts.is_empty() {
-        dbg_log!("No system fonts found.");
+        crate::dbg_log!("No system fonts found.");
     } else {
-        dbg_log!("Found {} usable system fonts.", fonts.len());
+        crate::dbg_log!("Found {} usable system fonts.", fonts.len());
     }
 
     fonts
@@ -63,7 +65,7 @@ pub fn search_system_font() -> Vec<FontInfo> {
 pub fn get_font_info(path: &std::path::Path) -> Option<FontInfo> {
     let data = std::fs::read(path);
     if data.is_err() {
-        dbg_log!(
+        crate::dbg_log!(
             "Failed to read font file at path: {}, {}",
             path.display(),
             data.err().unwrap()
@@ -75,7 +77,7 @@ pub fn get_font_info(path: &std::path::Path) -> Option<FontInfo> {
 
     let face = ttf_parser::Face::parse(&data, 0);
     if face.is_err() {
-        dbg_log!(
+        crate::dbg_log!(
             "Failed to parse font file at path: {}, {}",
             path.display(),
             face.err().unwrap()

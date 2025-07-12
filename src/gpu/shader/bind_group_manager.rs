@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-
-use crate::gpu::BindGroupLayout;
+use super::BindGroupLayout;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindGroupManager {

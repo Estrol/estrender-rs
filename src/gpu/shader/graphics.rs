@@ -4,14 +4,19 @@ use std::{borrow::Cow, collections::HashMap, hash::Hash};
 use wgpu::{BindingType, SamplerBindingType, ShaderRuntimeChecks, ShaderStages, naga::front::wgsl};
 
 use crate::{
-    dbg_log,
-    gpu::{VertexInputReflection, gpu_inner::GPUInner, shader::reflection},
     utils::ArcRef,
 };
 
 use super::{
-    BindGroupLayout, IndexBufferSize, ShaderBindingType, ShaderCullMode, ShaderFrontFace,
-    ShaderPollygonMode, ShaderReflect, ShaderTopology, StorageAccess, VertexInputType, parse,
+    types::{
+        BindGroupLayout, IndexBufferSize, 
+        ShaderBindingType, ShaderCullMode, 
+        ShaderFrontFace, ShaderPollygonMode, 
+        ShaderReflect, ShaderTopology, 
+        StorageAccess, VertexInputType,
+        VertexInputReflection,
+    },
+    super::GPUInner,
 };
 
 pub(crate) enum GraphicsShaderSource {
@@ -196,7 +201,7 @@ impl GraphicsShaderBuilder {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShaderType {
+pub enum GraphicsShaderType {
     GraphicsSingle {
         module: wgpu::ShaderModule,
     },
@@ -204,41 +209,28 @@ pub enum ShaderType {
         vertex_module: wgpu::ShaderModule,
         fragment_module: wgpu::ShaderModule,
     },
-    Compute {
-        module: wgpu::ShaderModule,
-    },
 }
 
-impl Hash for ShaderType {
+impl Hash for GraphicsShaderType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            ShaderType::GraphicsSingle { module } => {
+            GraphicsShaderType::GraphicsSingle { module } => {
                 module.hash(state);
             }
-            ShaderType::GraphicsSplit {
+            GraphicsShaderType::GraphicsSplit {
                 vertex_module,
                 fragment_module,
             } => {
                 vertex_module.hash(state);
                 fragment_module.hash(state);
             }
-            ShaderType::Compute { module } => {
-                module.hash(state);
-            }
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ShaderAttributeStages {
-    Vertex,
-    Fragment,
-    VertexFragment,
-}
-
 #[derive(Clone, Debug, Hash)]
 pub(crate) struct GraphicsShaderInner {
-    pub ty: ShaderType,
+    pub ty: GraphicsShaderType,
     pub reflection: Vec<ShaderReflect>,
 
     pub bind_group_layouts: Vec<BindGroupLayout>,
@@ -350,7 +342,7 @@ impl GraphicsShader {
             source: &str,
         ) -> Result<(wgpu::ShaderModule, ShaderReflect), String> {
             let module = wgsl::parse_str(source).map_err(|e| format!("Parse error: {e:?}"))?;
-            let reflection = parse(module).map_err(|e| format!("Reflect error: {e:?}"))?;
+            let reflection = super::reflection::parse(module).map_err(|e| format!("Reflect error: {e:?}"))?;
             Ok((
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: None,
@@ -364,7 +356,7 @@ impl GraphicsShader {
             device: &wgpu::Device,
             binary: &[u8],
         ) -> Result<(wgpu::ShaderModule, ShaderReflect), String> {
-            let binary_shader = reflection::load_binary_shader(binary)
+            let binary_shader = super::reflection::load_binary_shader(binary)
                 .map_err(|e| format!("Binary load error: {e:?}"))?;
             let spirv_u32 = Cow::Borrowed(bytemuck::cast_slice(&binary_shader.spirv));
             Ok((
@@ -399,7 +391,7 @@ impl GraphicsShader {
                         Ok(Self {
                             graphics: ArcRef::clone(&graphics),
                             inner: ArcRef::new(GraphicsShaderInner {
-                                ty: ShaderType::GraphicsSingle { module },
+                                ty: GraphicsShaderType::GraphicsSingle { module },
                                 reflection: vec![reflection],
                                 bind_group_layouts: layout,
                             }),
@@ -425,7 +417,7 @@ impl GraphicsShader {
                         Ok(Self {
                             graphics: ArcRef::clone(&graphics),
                             inner: ArcRef::new(GraphicsShaderInner {
-                                ty: ShaderType::GraphicsSplit {
+                                ty: GraphicsShaderType::GraphicsSplit {
                                     vertex_module,
                                     fragment_module,
                                 },
@@ -448,7 +440,7 @@ impl GraphicsShader {
                         Ok(Self {
                             graphics: ArcRef::clone(&graphics),
                             inner: ArcRef::new(GraphicsShaderInner {
-                                ty: ShaderType::GraphicsSingle { module },
+                                ty: GraphicsShaderType::GraphicsSingle { module },
                                 reflection: vec![reflection],
                                 bind_group_layouts: layout,
                             }),
@@ -474,7 +466,7 @@ impl GraphicsShader {
                         Ok(Self {
                             graphics: ArcRef::clone(&graphics),
                             inner: ArcRef::new(GraphicsShaderInner {
-                                ty: ShaderType::GraphicsSplit {
+                                ty: GraphicsShaderType::GraphicsSplit {
                                     vertex_module,
                                     fragment_module,
                                 },
@@ -572,7 +564,7 @@ impl GraphicsShader {
                             find_existing(&mut layouts, binding.group, binding.binding, ty);
                         if let Some(existing) = existing {
                             existing.visibility |= ShaderStages::VERTEX;
-                            dbg_log!(
+                            crate::dbg_log!(
                                 "BindGroupLayout: group {}, binding: {}, ty: {:?} (existing)",
                                 binding.group,
                                 binding.binding,
@@ -589,7 +581,7 @@ impl GraphicsShader {
 
                             let group = layouts.entry(binding.group).or_insert_with(Vec::new);
 
-                            dbg_log!(
+                            crate::dbg_log!(
                                 "BindGroupLayout: group {}, binding: {}, ty: {:?}",
                                 binding.group,
                                 binding.binding,
@@ -606,7 +598,7 @@ impl GraphicsShader {
                             find_existing(&mut layouts, binding.group, binding.binding, ty);
                         if let Some(existing) = existing {
                             existing.visibility |= ShaderStages::FRAGMENT;
-                            dbg_log!(
+                            crate::dbg_log!(
                                 "BindGroupLayout: group {}, binding: {}, ty: {:?} (existing)",
                                 binding.group,
                                 binding.binding,
@@ -623,7 +615,7 @@ impl GraphicsShader {
 
                             let group = layouts.entry(binding.group).or_insert_with(Vec::new);
 
-                            dbg_log!(
+                            crate::dbg_log!(
                                 "BindGroupLayout: group {}, binding: {}, ty: {:?}",
                                 binding.group,
                                 binding.binding,
@@ -647,7 +639,7 @@ impl GraphicsShader {
 
                         let group = layouts.entry(binding.group).or_insert_with(Vec::new);
 
-                        dbg_log!(
+                        crate::dbg_log!(
                             "BindGroupLayout: group {}, binding: {}, ty: {:?}",
                             binding.group,
                             binding.binding,
@@ -685,7 +677,7 @@ impl GraphicsShader {
                         entries: &layout,
                     });
 
-                dbg_log!(
+                crate::dbg_log!(
                     "Created BindGroupLayout for group {} with {} entries",
                     group,
                     layout.len()
