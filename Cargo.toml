@@ -1,6 +1,6 @@
 [package]
 name = "est-render"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Estrol Mendex <estrol@estrol.dev>"]
 description = "Easy to use winit, softbuffer & wgpu abstractions"
