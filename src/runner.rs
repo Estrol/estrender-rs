@@ -127,7 +127,7 @@ impl Runner {
         })
     }
 
-    /// Returns the pending events that have been processed by the event loop in [Runner::pool_events].
+    /// Returns the pending events that have been processed by the event loop in [Runner::pump_events].
     pub fn get_events(&self) -> &Vec<Event> {
         &self.pending_events
     }
@@ -210,22 +210,22 @@ impl Runner {
     /// - iOS: This method is not supported on iOS due to platform limitations.
     /// - WASM: This method is not supported on WASM due to how the browser handles events, unless
     /// you using the emscripten event loop.
-    pub fn pool_events<T>(&mut self, mode: T) -> bool
+    pub fn pump_events<T>(&mut self, mode: T) -> bool
     where
-        T: Into<Option<PollMode>>,
+        T: Into<Option<PumpMode>>,
     {
         let mut event_loop = self.event_loop.wait_borrow_mut();
         let mode = mode.into();
 
         let duration = match mode {
-            Some(PollMode::Poll) => Some(Duration::ZERO),
-            Some(PollMode::Wait) => None,
-            Some(PollMode::WaitDraw) => None,
+            Some(PumpMode::Poll) => Some(Duration::ZERO),
+            Some(PumpMode::Wait) => None,
+            Some(PumpMode::WaitDraw) => None,
             None => Some(Duration::ZERO),
         };
 
         let wait_for_redraw = match mode {
-            Some(PollMode::WaitDraw) => true,
+            Some(PumpMode::WaitDraw) => true,
             _ => false,
         };
 
@@ -935,7 +935,7 @@ pub(crate) fn named_key_to_str(key: &NamedKey) -> Option<SmolStr> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PollMode {
+pub enum PumpMode {
     /// The event loop will poll for events and return immediately.
     Poll,
     /// The event loop will wait for events and return when an event is available.

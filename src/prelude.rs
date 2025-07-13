@@ -1,7 +1,7 @@
 pub use super::runner::{
     Runner,
     Event,
-    PollMode,
+    PumpMode,
 };
 
 pub use super::gpu::{

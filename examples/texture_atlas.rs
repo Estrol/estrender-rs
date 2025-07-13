@@ -27,7 +27,7 @@ fn main() {
         .build()
         .expect("Failed to create texture atlas");
 
-    while runner.pool_events(None) {
+    while runner.pump_events(None) {
         for event in runner.get_events() {
             match event {
                 Event::WindowClosed { .. } => {

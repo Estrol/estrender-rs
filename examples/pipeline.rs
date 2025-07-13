@@ -150,7 +150,7 @@ fn main() {
         .build()
         .expect("Failed to create index buffer");
 
-    while runner.pool_events(PollMode::WaitDraw) {
+    while runner.pump_events(PumpMode::WaitDraw) {
         for event in runner.get_events() {
             match event {
                 Event::KeyboardInput {

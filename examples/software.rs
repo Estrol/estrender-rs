@@ -17,7 +17,7 @@ fn main() {
     let mut pixels = vec![128u32; (800 * 600) as usize];
     let mut size_px = Point2::new(800.0, 600.0);
 
-    while runner.pool_events(None) {
+    while runner.pump_events(None) {
         for event in runner.get_events() {
             match event {
                 Event::WindowClosed { .. } => {
