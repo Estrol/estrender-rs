@@ -238,155 +238,159 @@ impl Runner {
                         if let Some(mut window) = window.try_borrow_mut() {
                             window.process_event();
 
-                            let window_events = window.window_events.wait_borrow_mut();
-                            for event in window_events.iter() {
-                                match event {
-                                    event::WindowEvent::CloseRequested => {
-                                        self.pending_events.push(Event::WindowClosed {
-                                            window_id: window.window_id,
-                                        });
-                                    }
-                                    event::WindowEvent::Resized(size) => {
-                                        self.pending_events.push(Event::WindowResized {
-                                            window_id: window.window_id,
-                                            size: Point2::new(size.width, size.height),
-                                        });
-                                    }
-                                    event::WindowEvent::Moved(pos) => {
-                                        self.pending_events.push(Event::WindowMoved {
-                                            window_id: window.window_id,
-                                            pos: Point2::new(pos.x, pos.y),
-                                        });
-                                    }
-                                    event::WindowEvent::RedrawRequested => {
-                                        self.pending_events.push(Event::RedrawRequested {
-                                            window_id: window.window_id,
-                                        });
-                                    }
-                                    event::WindowEvent::KeyboardInput {
-                                        event,
-                                        is_synthetic,
-                                        ..
-                                    } => {
-                                        if *is_synthetic {
-                                            continue;
+                            {
+                                let window_events = window.window_events.wait_borrow_mut();
+                                for event in window_events.iter() {
+                                    match event {
+                                        event::WindowEvent::CloseRequested => {
+                                            self.pending_events.push(Event::WindowClosed {
+                                                window_id: window.window_id,
+                                            });
                                         }
-
-                                        let is_pressed =
-                                            event.state == event::ElementState::Pressed;
-
-                                        match event.logical_key {
-                                            Key::Character(ref smol_str) => {
-                                                let smol_key = smol_str.clone();
-
-                                                self.pending_events.push(Event::KeyboardInput {
-                                                    window_id: window.window_id,
-                                                    key: smol_key,
-                                                    pressed: is_pressed,
-                                                });
+                                        event::WindowEvent::Resized(size) => {
+                                            self.pending_events.push(Event::WindowResized {
+                                                window_id: window.window_id,
+                                                size: Point2::new(size.width, size.height),
+                                            });
+                                        }
+                                        event::WindowEvent::Moved(pos) => {
+                                            self.pending_events.push(Event::WindowMoved {
+                                                window_id: window.window_id,
+                                                pos: Point2::new(pos.x, pos.y),
+                                            });
+                                        }
+                                        event::WindowEvent::RedrawRequested => {
+                                            self.pending_events.push(Event::RedrawRequested {
+                                                window_id: window.window_id,
+                                            });
+                                        }
+                                        event::WindowEvent::KeyboardInput {
+                                            event,
+                                            is_synthetic,
+                                            ..
+                                        } => {
+                                            if *is_synthetic {
+                                                continue;
                                             }
-                                            Key::Named(ref named_key) => {
-                                                let smol_key = named_key_to_str(named_key);
-                                                if smol_key.is_none() {
-                                                    continue;
+
+                                            let is_pressed =
+                                                event.state == event::ElementState::Pressed;
+
+                                            match event.logical_key {
+                                                Key::Character(ref smol_str) => {
+                                                    let smol_key = smol_str.clone();
+
+                                                    self.pending_events.push(Event::KeyboardInput {
+                                                        window_id: window.window_id,
+                                                        key: smol_key,
+                                                        pressed: is_pressed,
+                                                    });
                                                 }
+                                                Key::Named(ref named_key) => {
+                                                    let smol_key = named_key_to_str(named_key);
+                                                    if smol_key.is_none() {
+                                                        continue;
+                                                    }
 
-                                                let smol_key = smol_key.unwrap();
+                                                    let smol_key = smol_key.unwrap();
 
-                                                self.pending_events.push(Event::KeyboardInput {
-                                                    window_id: window.window_id,
-                                                    key: smol_key,
-                                                    pressed: is_pressed,
-                                                });
-                                            }
-                                            Key::Unidentified(NativeKey::Windows(virtual_key)) => {
-                                                let fmt = format!("virtual-key:{:?}", virtual_key);
-                                                let smol_key = SmolStr::new(fmt);
+                                                    self.pending_events.push(Event::KeyboardInput {
+                                                        window_id: window.window_id,
+                                                        key: smol_key,
+                                                        pressed: is_pressed,
+                                                    });
+                                                }
+                                                Key::Unidentified(NativeKey::Windows(virtual_key)) => {
+                                                    let fmt = format!("virtual-key:{:?}", virtual_key);
+                                                    let smol_key = SmolStr::new(fmt);
 
-                                                self.pending_events.push(Event::KeyboardInput {
-                                                    window_id: window.window_id,
-                                                    key: smol_key,
-                                                    pressed: is_pressed,
-                                                });
-                                            }
-                                            _ => {
-                                                // ignore
-                                            }
-                                        }
-                                    }
-                                    event::WindowEvent::MouseWheel {
-                                        delta, phase: _, ..
-                                    } => {
-                                        let delta = match delta {
-                                            event::MouseScrollDelta::LineDelta(
-                                                delta_x,
-                                                delta_y,
-                                            ) => MouseScrollDelta::LineDelta {
-                                                delta_x: *delta_x,
-                                                delta_y: *delta_y,
-                                            },
-                                            event::MouseScrollDelta::PixelDelta(delta_pos) => {
-                                                MouseScrollDelta::PixelDelta {
-                                                    delta_x: delta_pos.x as f32,
-                                                    delta_y: delta_pos.y as f32,
+                                                    self.pending_events.push(Event::KeyboardInput {
+                                                        window_id: window.window_id,
+                                                        key: smol_key,
+                                                        pressed: is_pressed,
+                                                    });
+                                                }
+                                                _ => {
+                                                    // ignore
                                                 }
                                             }
-                                        };
+                                        }
+                                        event::WindowEvent::MouseWheel {
+                                            delta, phase: _, ..
+                                        } => {
+                                            let delta = match delta {
+                                                event::MouseScrollDelta::LineDelta(
+                                                    delta_x,
+                                                    delta_y,
+                                                ) => MouseScrollDelta::LineDelta {
+                                                    delta_x: *delta_x,
+                                                    delta_y: *delta_y,
+                                                },
+                                                event::MouseScrollDelta::PixelDelta(delta_pos) => {
+                                                    MouseScrollDelta::PixelDelta {
+                                                        delta_x: delta_pos.x as f32,
+                                                        delta_y: delta_pos.y as f32,
+                                                    }
+                                                }
+                                            };
 
-                                        self.pending_events.push(Event::MouseWheel {
-                                            window_id: window.window_id,
-                                            delta,
-                                        });
-                                    }
-                                    event::WindowEvent::MouseInput {
-                                        device_id: _,
-                                        state,
-                                        button,
-                                    } => {
-                                        let is_pressed = *state == event::ElementState::Pressed;
-                                        let smoll_str = match button {
-                                            event::MouseButton::Left => SmolStr::new("Left"),
-                                            event::MouseButton::Right => SmolStr::new("Right"),
-                                            event::MouseButton::Middle => SmolStr::new("Middle"),
-                                            event::MouseButton::Back => SmolStr::new("Back"),
-                                            event::MouseButton::Forward => SmolStr::new("Forward"),
-                                            event::MouseButton::Other(_) => continue, // Ignore other buttons
-                                        };
+                                            self.pending_events.push(Event::MouseWheel {
+                                                window_id: window.window_id,
+                                                delta,
+                                            });
+                                        }
+                                        event::WindowEvent::MouseInput {
+                                            device_id: _,
+                                            state,
+                                            button,
+                                        } => {
+                                            let is_pressed = *state == event::ElementState::Pressed;
+                                            let smoll_str = match button {
+                                                event::MouseButton::Left => SmolStr::new("Left"),
+                                                event::MouseButton::Right => SmolStr::new("Right"),
+                                                event::MouseButton::Middle => SmolStr::new("Middle"),
+                                                event::MouseButton::Back => SmolStr::new("Back"),
+                                                event::MouseButton::Forward => SmolStr::new("Forward"),
+                                                event::MouseButton::Other(_) => continue, // Ignore other buttons
+                                            };
 
-                                        self.pending_events.push(Event::MouseInput {
-                                            window_id: window.window_id,
-                                            button: smoll_str,
-                                            pressed: is_pressed,
-                                        });
+                                            self.pending_events.push(Event::MouseInput {
+                                                window_id: window.window_id,
+                                                button: smoll_str,
+                                                pressed: is_pressed,
+                                            });
+                                        }
+                                        event::WindowEvent::CursorEntered { device_id: _ } => {
+                                            self.pending_events.push(Event::CursorEntered {
+                                                window_id: window.window_id,
+                                            });
+                                        }
+                                        event::WindowEvent::CursorLeft { device_id: _ } => {
+                                            self.pending_events.push(Event::CursorLeft {
+                                                window_id: window.window_id,
+                                            });
+                                        }
+                                        event::WindowEvent::CursorMoved {
+                                            device_id: _,
+                                            position,
+                                        } => {
+                                            self.pending_events.push(Event::CursorMoved {
+                                                window_id: window.window_id,
+                                                pos: Point2::new(position.x, position.y),
+                                            });
+                                        }
+                                        event::WindowEvent::Focused(focused) => {
+                                            self.pending_events.push(Event::WindowFocused {
+                                                window_id: window.window_id,
+                                                focused: *focused,
+                                            });
+                                        }
+                                        _ => {}
                                     }
-                                    event::WindowEvent::CursorEntered { device_id: _ } => {
-                                        self.pending_events.push(Event::CursorEntered {
-                                            window_id: window.window_id,
-                                        });
-                                    }
-                                    event::WindowEvent::CursorLeft { device_id: _ } => {
-                                        self.pending_events.push(Event::CursorLeft {
-                                            window_id: window.window_id,
-                                        });
-                                    }
-                                    event::WindowEvent::CursorMoved {
-                                        device_id: _,
-                                        position,
-                                    } => {
-                                        self.pending_events.push(Event::CursorMoved {
-                                            window_id: window.window_id,
-                                            pos: Point2::new(position.x, position.y),
-                                        });
-                                    }
-                                    event::WindowEvent::Focused(focused) => {
-                                        self.pending_events.push(Event::WindowFocused {
-                                            window_id: window.window_id,
-                                            focused: *focused,
-                                        });
-                                    }
-                                    _ => {}
                                 }
                             }
+
+                            window.cycle();
                         }
                     }
                 }

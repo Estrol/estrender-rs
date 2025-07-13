@@ -28,6 +28,7 @@ fn main() {
             if let Ok(mut gp) = cmd.begin_renderpass() {
                 gp.set_clear_color(Color::BLUE); // Set the clear color to blue
 
+                gp.set_blend(0, Some(&BlendState::ALPHA_BLEND));
                 if let Some(mut drawing) = gp.begin_drawing() {
                     drawing.draw_rect_filled(
                         Vector2::new(100.0, 100.0),
@@ -36,6 +37,15 @@ fn main() {
                     );
 
                     drawing.draw_circle_filled(Vector2::new(400.0, 300.0), 50.0, 25, Color::GREEN);
+                }
+
+                gp.set_blend(0, Some(&BlendState::ADDITIVE_BLEND));
+                if let Some(mut drawing) = gp.begin_drawing() {
+                    drawing.draw_text(
+                        "Hello, World!",
+                        Vector2::new(300.0, 500.0),
+                        Color::WHITE,
+                    );
                 }
             }
         }

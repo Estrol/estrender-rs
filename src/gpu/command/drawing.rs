@@ -19,7 +19,6 @@ use super::{
             TextureFormat
         },
         shader::{GraphicsShader, GraphicsShaderBuilder},
-        buffer::{Buffer, BufferBuilder, BufferUsage},
     },
 };
 
@@ -27,15 +26,12 @@ use super::{
 pub(crate) struct DrawingGlobalState {
     pub texture: Texture,
     pub shader: GraphicsShader,
-    pub vertex_buffer: Buffer,
-    pub index_buffer: Buffer,
-
     pub font_manager: FontManager,
     pub font_textures: HashMap<String, Texture>,
 }
 
 impl DrawingGlobalState {
-    pub(crate) fn new(gpu_inner: &ArcRef<GPUInner>) -> Option<Self> {
+    pub fn new(gpu_inner: &ArcRef<GPUInner>) -> Option<Self> {
         let default_texture = TextureBuilder::new(ArcRef::clone(gpu_inner))
             .set_raw_image(&[255u8, 255, 255, 255], Point2::new(1, 1), TextureFormat::Bgra8Unorm)
             .set_usage(TextureUsage::Sampler)
@@ -47,25 +43,11 @@ impl DrawingGlobalState {
             .build()
             .ok()?;
 
-        let vtx_buffer = BufferBuilder::new(ArcRef::clone(gpu_inner))
-            .set_usage(BufferUsage::VERTEX | BufferUsage::COPY_DST)
-            .set_data_slice(&[Vertex::default(); 1])
-            .build()
-            .ok()?;
-
-        let idx_buffer = BufferBuilder::new(ArcRef::clone(gpu_inner))
-            .set_usage(BufferUsage::INDEX | BufferUsage::COPY_DST)
-            .set_data_slice(&[0u16; 1])
-            .build()
-            .ok()?;
-
         let font_manager = FontManager::new();
 
         Some(Self {
             texture: default_texture,
             shader: default_shader,
-            vertex_buffer: vtx_buffer,
-            index_buffer: idx_buffer,
             font_manager,
             font_textures: HashMap::new(),
         })
@@ -376,11 +358,7 @@ impl DrawingContext {
     pub fn draw_text(&mut self, text: &str, pos: Vector2, color: Color) {
         let mut inner = self.inner.borrow_mut();
         if inner.current_font.is_none() {
-            #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-            {
-                crate::dbg_log!("No font selected for drawing text");
-            }
-            return;
+            inner.load_font("Arial", None, 16.0);
         }
 
         vec_clear(&mut self.vertex_cache);
@@ -1076,6 +1054,9 @@ impl DrawingContext {
         let indices = inner.indices.drain(..).collect::<Vec<_>>();
 
         {
+            let graphics_inner = inner.pass.graphics.borrow();
+            let drawing = graphics_inner.drawing_state.as_ref().unwrap().borrow();
+            
             let swapchain_size = {
                 let renderpass_inner = inner.pass.inner.borrow_mut();
 
@@ -1089,30 +1070,8 @@ impl DrawingContext {
                 vertex.position.x = vertex.position.x / swapchain_size.x * 2.0 - 1.0;
                 vertex.position.y = 1.0 - (vertex.position.y / swapchain_size.y * 2.0);
             }
-        };
-
-        let (vertex_buffer, index_buffer) = {
-            let (mut vertex_buffer, mut index_buffer) = {
-                let graphics_inner = inner.pass.graphics.borrow_mut();
-
-                let drawing_mut = graphics_inner.drawing_state
-                    .as_ref()
-                    .unwrap()
-                    .borrow_mut();
-
-                let vertex_buffer = drawing_mut.vertex_buffer.clone();
-                let index_buffer = drawing_mut.index_buffer.clone();
-
-                (
-                    vertex_buffer,
-                    index_buffer,
-                )
-            };
 
             for queue in queues.iter_mut() {
-                let inner = inner.pass.graphics.borrow();
-                let drawing = inner.drawing_state.as_ref().unwrap().borrow();
-
                 if queue.texture.is_none() {
                     let default_texture = drawing
                         .texture
@@ -1130,27 +1089,16 @@ impl DrawingContext {
                     queue.shader = Some(default_shader);
                 }
             }
+        };
+
+        let (vertex_buffer, index_buffer) = {
+            let mut graphics_inner = inner.pass.graphics.borrow_mut();
             
-            let expected_vertex_size = (vertices.len() * std::mem::size_of::<Vertex>()) as u64;
-            let expected_index_size = (indices.len() * std::mem::size_of::<u16>()) as u64;
+            let vertex_buffer = graphics_inner
+                .create_staging_buffer(bytemuck::cast_slice(&vertices), wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
 
-            if vertex_buffer.size() < expected_vertex_size {
-                vertex_buffer.resize(expected_vertex_size)
-                    .expect("Failed to resize vertex buffer");
-            }
-
-            if index_buffer.size() < expected_index_size {
-                index_buffer.resize(expected_index_size)
-                    .expect("Failed to resize index buffer");
-            }
-
-            {
-                let inner = inner.pass.inner.borrow();
-                let mut cmd = inner.cmd.borrow_mut();
-
-                vertex_buffer.internal_write_raw_cmd_ref(&vertices, &mut cmd);
-                index_buffer.internal_write_raw_cmd_ref(&indices, &mut cmd);
-            }
+            let index_buffer = graphics_inner
+                .create_staging_buffer(bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST);
 
             (vertex_buffer, index_buffer)
         };
@@ -1165,7 +1113,7 @@ impl DrawingContext {
 
             pass.set_shader(queue.shader.as_ref());
             pass
-                .set_gpu_buffer(Some(&vertex_buffer), Some(&index_buffer));
+                .set_gpu_buffer_wgpu(Some(vertex_buffer.clone()), Some(index_buffer.clone()));
 
             pass.set_attachment_texture(0, 0, Some(&texture));
             pass.set_attachment_sampler(0, 1, Some(sampler));

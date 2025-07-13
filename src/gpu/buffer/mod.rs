@@ -13,6 +13,8 @@ use super::{
     GPUInner,
 };
 
+pub(crate) mod staging_buffer;
+
 /// Represents the usage flags for a GPU buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BufferUsage(u32);

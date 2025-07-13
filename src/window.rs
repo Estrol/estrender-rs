@@ -227,6 +227,12 @@ impl WindowInner {
             }
         }
     }
+
+    pub fn cycle(&mut self) {
+        if let Some(gpu) = &self.graphics {
+            gpu.wait_borrow_mut().cycle();
+        }
+    }
 }
 
 

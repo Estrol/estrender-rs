@@ -32,7 +32,10 @@ use texture::{
 
 use pipeline::manager::{ComputePipelineDesc, GraphicsPipelineDesc};
 
-use buffer::BufferBuilder;
+use buffer::{
+    BufferBuilder,
+    staging_buffer::StagingBuffer,
+};
 
 pub mod buffer;
 pub mod command;
@@ -470,6 +473,7 @@ pub(crate) struct GPUInner {
 
     pub pipeline_manager: Option<PipelineManager>,
     pub bind_group_manager: Option<BindGroupManager>,
+    pub staging_buffer: Option<StagingBuffer>,
 
     pub drawing_state: Option<ArcRef<DrawingGlobalState>>,
 }
@@ -744,6 +748,7 @@ impl GPUInner {
 
         let pipeline_manager = PipelineManager::new();
         let bind_group_manager = BindGroupManager::new();
+        let staging_buffer = StagingBuffer::new();
 
         let id = INSTANCE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -762,9 +767,28 @@ impl GPUInner {
             pipeline_cache,
             pipeline_manager: Some(pipeline_manager),
             bind_group_manager: Some(bind_group_manager),
+            staging_buffer: Some(staging_buffer),
             
             drawing_state: None,
         })
+    }
+
+    pub fn cycle(&mut self) {
+        if self.is_invalid {
+            panic!("Invalid GPU context");
+        }
+
+        if let Some(ref mut pipeline_manager) = self.pipeline_manager {
+            pipeline_manager.cycle();
+        }
+
+        if let Some(ref mut bind_group_manager) = self.bind_group_manager {
+            bind_group_manager.cycle();
+        }
+
+        if let Some(ref mut staging_buffer) = self.staging_buffer {
+            staging_buffer.cycle();
+        }
     }
 
     pub fn is_srgb(&self) -> bool {
@@ -1079,6 +1103,22 @@ impl GPUInner {
         let bind_group_manager_ref = self.bind_group_manager.as_mut().unwrap();
 
         bind_group_manager_ref.get(key as usize)
+    }
+
+    pub fn create_staging_buffer(
+        &mut self,
+        data: &[u8],
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
+        if self.is_invalid {
+            panic!("Invalid GPU context");
+        }
+
+        let device = self.device.as_ref().unwrap();
+        let queue = self.queue.as_ref().unwrap();
+        let staging_buffer_ref = self.staging_buffer.as_mut().unwrap();
+
+        staging_buffer_ref.allocate(device, queue, data, usage)
     }
 }
 
