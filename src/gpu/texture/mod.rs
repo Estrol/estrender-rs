@@ -1,4 +1,5 @@
 pub mod atlas;
+pub mod sprite;
 
 mod types;
 pub use types::*;

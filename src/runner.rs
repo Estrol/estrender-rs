@@ -2,7 +2,7 @@ use std::{
     collections::HashMap, hash::{Hash, Hasher}, io::Read, sync::{atomic::{AtomicBool, AtomicUsize}, Arc, Mutex}, thread::ThreadId, time::Duration
 };
 
-use crate::{math::{Point2, Timing}, utils::{ArcMut, ArcRef}, window::{WindowInner, WindowBuilder}};
+use crate::{input::{self, InputInner}, math::{Point2, Timing}, utils::{ArcMut, ArcRef}, window::{Window, WindowBuilder, WindowInner}};
 
 use smol_str::SmolStr;
 use wgpu::rwh::HasWindowHandle;
@@ -61,6 +61,7 @@ pub struct Runner {
     pub(crate) event_loop: ArcRef<EventLoop<WindowEvent>>,
     pub(crate) event_loop_proxy: EventLoopProxy<WindowEvent>,
     pub(crate) window_events_attributes: Vec<ArcRef<WindowInner>>,
+    pub(crate) input_events_attributes: Vec<ArcRef<InputInner>>,
     pub(crate) rate_timing: Timing,
     pub(crate) pending_events: Vec<Event>,
 }
@@ -122,6 +123,7 @@ impl Runner {
             event_loop,
             event_loop_proxy,
             window_events_attributes: Vec::new(),
+            input_events_attributes: Vec::new(),
             rate_timing: Timing::new(0),
             pending_events: Vec::new(),
         })
@@ -135,6 +137,18 @@ impl Runner {
     /// Creates a new [WindowBuilder] instance to build a new window.
     pub fn create_window(&mut self, title: &str, size: Point2) -> WindowBuilder {
         WindowBuilder::new(self, title, size)
+    }
+
+    /// Creates a new [Input] instance for handling input events.
+    /// 
+    /// You can pass an optional [Window] reference to associate the input with a specific window.
+    /// If no window is provided, the input will be global and not associated with any specific window.
+    /// 
+    /// You still need a [Window] created with [Runner::create_window] to receive input events.
+    pub fn create_input(&mut self, window_id: Option<&Window>) -> input::Input {
+        let window_id = window_id.map(|w| w.id());
+
+        input::Input::new(self, window_id)
     }
 
     /// This called from [WindowBuilder] to create a new window.
@@ -404,6 +418,16 @@ impl Runner {
 
             for window in self.window_events_attributes.iter() {
                 window.wait_borrow().window_events.wait_borrow_mut().clear();
+            }
+
+            if self.input_events_attributes.len() > 0 {
+                for event in self.pending_events.iter() {
+                    for input in self.input_events_attributes.iter() {
+                        if let Some(mut input) = input.try_borrow_mut() {
+                            input.process_event(event);
+                        }
+                    }
+                }
             }
 
             if wait_for_redraw {

@@ -121,6 +121,13 @@ impl RenderPass {
     }
 
     #[inline]
+    pub fn surface_size(&self) -> Point2 {
+        let inner = self.inner.borrow();
+        
+        inner.surface_size
+    }
+
+    #[inline]
     pub fn set_clear_color(&mut self, _color: Color) {
         let mut inner = self.inner.borrow_mut();
         inner.clear_color = Some(_color);
