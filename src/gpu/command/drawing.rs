@@ -343,18 +343,31 @@ impl DrawingContext {
         (vertices, indices)
     }
 
-    #[allow(unused)]
+    /// Load a font from the specified path with an optional range of codepoints and size.
     pub fn load_font(&mut self, font_path: &str, range: Option<&[(u32, u32)]>, size: f32) {
         let mut inner = self.inner.borrow_mut();
         inner.load_font(font_path, range, size);
     }
 
+    /// Set the current font to be used for drawing text.
     pub fn set_font(&mut self, font: &Font) {
         let mut inner = self.inner.borrow_mut();
         inner.set_font(font);
     }
 
-    #[allow(unused)]
+    /// Get the current font, loading it if it hasn't been set yet.
+    pub fn get_font(&self) -> Font {
+        let mut inner = self.inner.borrow_mut();
+        if inner.current_font.is_none() {
+            inner.load_font("Arial", None, 16.0);
+        }
+
+        inner.current_font.clone().unwrap_or_else(|| {
+            panic!("Fatal: No font loaded, this shouldn't happen as default Font is loaded on demand.");
+        })
+    }
+
+    /// Draw text with a specified position, color, and font.
     pub fn draw_text(&mut self, text: &str, pos: Vector2, color: Color) {
         let mut inner = self.inner.borrow_mut();
         if inner.current_font.is_none() {
@@ -670,6 +683,27 @@ impl DrawingContext {
             .push_geometry(&vertices, &indices, false);
     }
 
+    pub fn draw_triangle_filled_colors(
+        &mut self,
+        a: Vector2,
+        b: Vector2,
+        c: Vector2,
+        color_a: Color,
+        color_b: Color,
+        color_c: Color,
+    ) {
+        let vertices = [
+            Vertex::new(Vector3::new(a.x, a.y, 0.0), color_a, Vector2::ZERO),
+            Vertex::new(Vector3::new(b.x, b.y, 0.0), color_b, Vector2::ZERO),
+            Vertex::new(Vector3::new(c.x, c.y, 0.0), color_c, Vector2::ZERO),
+        ];
+
+        let indices = [0, 1, 2];
+
+        self.inner.borrow_mut()
+            .push_geometry(&vertices, &indices, false);
+    }
+
     /// Draw circle with a specified center, radius, number of segments, thickness, and color.
     pub fn draw_circle(
         &mut self,
@@ -851,6 +885,28 @@ impl DrawingContext {
                 color,
                 Vector2::new(uv.w * 0.5, uv.h),
             ),
+        ];
+
+        let indices = [0, 1, 2];
+        inner.push_geometry(&vertices, &indices, true);
+    }
+
+    pub fn draw_triangle_image_colors(
+        &mut self,
+        a: Vector2,
+        b: Vector2,
+        c: Vector2,
+        color_a: Color,
+        color_b: Color,
+        color_c: Color,
+    ) {
+        let mut inner = self.inner.borrow_mut();
+        let uv = inner.get_absolute_uv();
+
+        let vertices = [
+            Vertex::new(Vector3::new(a.x, a.y, 0.0), color_a, Vector2::new(uv.x, uv.y)),
+            Vertex::new(Vector3::new(b.x, b.y, 0.0), color_b, Vector2::new(uv.w, uv.y)),
+            Vertex::new(Vector3::new(c.x, c.y, 0.0), color_c, Vector2::new(uv.w * 0.5, uv.h)),
         ];
 
         let indices = [0, 1, 2];

@@ -73,6 +73,13 @@ pub use super::window::{
     WindowError,
 };
 
+pub use super::input::{
+    Input,
+    KeyboardEvent,
+    MouseEvent,
+    MouseMoveEvent
+};
+
 pub use super::math::*;
 
 #[cfg(feature = "software")]

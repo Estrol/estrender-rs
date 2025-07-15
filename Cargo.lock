@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "est-render"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "bitflags 2.9.1",
  "bytemuck",
