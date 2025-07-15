@@ -16,18 +16,13 @@ fn main() {
         .expect("Failed to create second window");
 
     let input = runner.create_input(None);
-    let input2 = runner.create_input(Some(&window2));
+    let mut input2 = runner.create_input(Some(&window2));
+
+    input2.listen_keyboard_event(|key, pressed| {
+        println!("Second window keyboard event: {} - {}", key, pressed);
+    });
 
     while runner.pump_events(None) {
-        for event in runner.get_events() {
-            match event {
-                Event::WindowClosed { .. } => {
-                    return;
-                }
-                _ => {}
-            }
-        }
-
         if input.mouse_pressed_once("Left") {
             println!("Mouse position: {:?}", input.mouse_position());
         }

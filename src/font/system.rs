@@ -1,11 +1,26 @@
+use crate::utils::ArcMut;
+
 // use crate::{dbg_log, font_::FontStyle};
 use super::{
     FontInfo,
     FontStyle,
 };
 
+lazy_static::lazy_static! {
+    pub static ref SYSTEM_FONTS: ArcMut<Vec<FontInfo>> = ArcMut::new(Vec::new());
+}
+
 pub fn search_system_font() -> Vec<FontInfo> {
+    if !SYSTEM_FONTS.lock().is_empty() {
+        return SYSTEM_FONTS.lock().clone();
+    }
+
     // Determine system font directories based on OS
+    #[cfg(debug_assertions)]
+    {
+        crate::dbg_log!("Searching system fonts...");
+    }
+
     let mut font_dirs = Vec::new();
 
     #[cfg(target_os = "windows")]
@@ -53,11 +68,18 @@ pub fn search_system_font() -> Vec<FontInfo> {
         }
     }
 
-    if fonts.is_empty() {
-        crate::dbg_log!("No system fonts found.");
-    } else {
-        crate::dbg_log!("Found {} usable system fonts.", fonts.len());
+    #[cfg(debug_assertions)]
+    {
+        if fonts.is_empty() {
+            crate::dbg_log!("No system fonts found.");
+        } else {
+            crate::dbg_log!("Found {} system fonts.", fonts.len());
+        }
     }
+
+    // Cache the found fonts
+    lazy_static::initialize(&SYSTEM_FONTS);
+    SYSTEM_FONTS.lock().extend(fonts.clone());
 
     fonts
 }

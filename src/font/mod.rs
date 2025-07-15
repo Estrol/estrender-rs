@@ -25,6 +25,20 @@ pub fn new() -> FontManager {
     FontManager::new()
 }
 
+pub fn load_font(path: &str, glyph: Option<&[(u32, u32)]>, size: f32) -> Result<Font, FontError> {
+    let font_info = system::get_font_info(std::path::Path::new(path));
+
+    if font_info.is_none() {
+        return Err(FontError::InvalidFontData(format!(
+            "Failed to load font from path: {}",
+            path
+        )));
+    }
+
+    let font_info = font_info.unwrap();
+    Font::new(font_info, size, glyph.unwrap_or(&[(0x20, 0x7E)]))
+}
+
 mod system;
 
 #[derive(Clone, Copy, Debug)]
@@ -75,6 +89,7 @@ fn power_of_two(n: usize) -> usize {
     power
 }
 
+#[derive(Clone, Debug)]
 pub enum FontBakeFormat {
     GrayScale,
     Rgba,
@@ -84,10 +99,26 @@ pub enum FontError {
     InvalidFontData(String),
     GlyphNotFound(u32),
     IoError(std::io::Error),
+    InvalidSize(f32),
+    PackFailed(String),
+    FontError(String),
+}
+
+impl std::fmt::Debug for FontError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FontError::InvalidFontData(msg) => write!(f, "Invalid font data: {}", msg),
+            FontError::GlyphNotFound(codepoint) => write!(f, "Glyph not found for codepoint: {}", codepoint),
+            FontError::IoError(err) => write!(f, "IO error: {}", err),
+            FontError::InvalidSize(size) => write!(f, "Invalid size: {}", size),
+            FontError::PackFailed(msg) => write!(f, "Pack failed: {}", msg),
+            FontError::FontError(msg) => write!(f, "Font error: {}", msg),
+        }
+    }
 }
 
 impl Font {
-    pub(crate) fn new(info: FontInfo, size: f32, glyph_range: &[(u32, u32)]) -> Self {
+    pub(crate) fn new(info: FontInfo, size: f32, glyph_range: &[(u32, u32)]) -> Result<Self, FontError> {
         let data = std::fs::read(&info.path).expect("Failed to read font file");
         let font = fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
             .expect("Failed to parse font file");
@@ -95,12 +126,19 @@ impl Font {
         let line_metrics = font.horizontal_line_metrics(size);
         let pixel_gap = 2usize; // Add a pixel gap to avoid artifacts
 
-        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        // #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+        // if line_metrics.is_none() {
+        //     panic!(
+        //         "Failed to get line metrics for font: {}",
+        //         info.path.display()
+        //     );
+        // }
+
         if line_metrics.is_none() {
-            panic!(
+            return Err(FontError::FontError(format!(
                 "Failed to get line metrics for font: {}",
                 info.path.display()
-            );
+            )));
         }
 
         let line_metrics = line_metrics.unwrap();
@@ -128,10 +166,11 @@ impl Font {
         };
 
         if tex_width > MAX_ATLAS_SIZE as i32 {
-            panic!(
-                "Calculated texture area {} exceeds maximum atlas size {}",
-                tex_width, MAX_ATLAS_SIZE
-            );
+            // panic!(
+            //     "Calculated texture area {} exceeds maximum atlas size {}",
+            //     tex_width, MAX_ATLAS_SIZE
+            // );
+            return Err(FontError::InvalidSize(tex_width as f32));
         }
 
         let rect_config = rect_packer::Config {
@@ -161,15 +200,19 @@ impl Font {
                     max_size.x = max_size.x.max(rect.x + rect.width);
                     max_size.y = max_size.y.max(rect.y + rect.height);
                 } else {
-                    #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
-                    panic!(
+                    // #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+                    // panic!(
+                    //     "Failed to pack glyph: {} ({}x{}) with atlas size {}x{}",
+                    //     codepoint_char,
+                    //     metrics.width,
+                    //     metrics.height,
+                    //     tex_width,
+                    //     tex_width
+                    // );
+                    return Err(FontError::PackFailed(format!(
                         "Failed to pack glyph: {} ({}x{}) with atlas size {}x{}",
-                        codepoint_char,
-                        metrics.width,
-                        metrics.height,
-                        tex_width,
-                        tex_width
-                    );
+                        codepoint_char, metrics.width, metrics.height, tex_width, tex_width
+                    )));
                 }
             }
         }
@@ -234,9 +277,9 @@ impl Font {
 
         let inner = ArcRef::new(inner);
         
-        Font {
+        Ok(Font {
             inner,
-        }
+        })
     }
 
     pub fn line_height(&self) -> f32 {
@@ -747,7 +790,7 @@ impl FontManager {
         font_name: &str,
         glyph_range: Option<&[(u32, u32)]>,
         size: f32,
-    ) -> Option<Font> {
+    ) -> Result<Font, FontError> {
         let glyph_range = glyph_range.unwrap_or(&DEFAULT_GLYPH_RANGE);
 
         let hashed_name = {
@@ -762,7 +805,7 @@ impl FontManager {
         };
 
         if self.cached_font.contains_key(&hashed_name) {
-            return self.cached_font.get(&hashed_name).cloned();
+            return Ok(self.cached_font.get(&hashed_name).unwrap().clone());
         }
 
         if std::path::Path::new(font_name).exists() {
@@ -770,26 +813,43 @@ impl FontManager {
 
             let font_info = system::get_font_info(path);
             if font_info.is_none() {
-                return None;
+                return Err(FontError::InvalidFontData(format!(
+                    "Failed to load font from path: {}",
+                    font_name
+                )));
             }
 
             let font_info = font_info.unwrap();
             let font = Font::new(font_info, size, glyph_range);
+            if font.is_err() {
+                return Err(font.err().unwrap());
+            }
 
+            let font = font.unwrap();
             self.cached_font.insert(hashed_name, font.clone());
 
-            return Some(font);
+            return Ok(font);
         } else {
             for font in &self.fonts {
                 if font.name == font_name {
                     let font = Font::new(font.clone(), size, glyph_range);
+
+                    if font.is_err() {
+                        return Err(font.err().unwrap());
+                    }
+                    
+                    let font = font.unwrap();
                     self.cached_font.insert(hashed_name, font.clone());
-                    return Some(font);
+
+                    return Ok(font);
                 }
             }
         }
 
-        None
+        Err(FontError::InvalidFontData(format!(
+            "Font not found: {}",
+            font_name
+        )))
     }
 
     /// Loads a font from a cached file.

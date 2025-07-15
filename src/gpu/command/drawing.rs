@@ -202,7 +202,7 @@ impl DrawingContextInner {
 
     pub fn load_font(&mut self, font_path: &str, range: Option<&[(u32, u32)]>, size: f32) {
         let mut state = self.drawing_global_state.borrow_mut();
-        if let Some(font) = state.font_manager.load_font(font_path, range, size) {
+        if let Ok(font) = state.font_manager.load_font(font_path, range, size) {
             if !state.font_textures.contains_key(font_path) {
                 let texture = font.create_texture_inner(&self.pass.graphics)
                     .expect("Failed to create font texture");
