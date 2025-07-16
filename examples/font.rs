@@ -22,7 +22,7 @@ fn main() {
 
     // Generate baked text texture
     let texture = font
-        .create_baked_text(&mut gpu, "Hello, World!\nThis is a clear color example.")
+        .create_baked_text(&mut gpu, "Hello, World!\nThis is a clear color example.", None)
         .expect("Failed to create baked text");
 
     while runner.pump_events(None) {

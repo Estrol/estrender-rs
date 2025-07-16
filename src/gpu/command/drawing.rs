@@ -156,8 +156,26 @@ impl DrawingContextInner {
                         || old_sampler != new_sampler
                 }
             };
-
+            
             if texture_changed {
+                push_new_queue = true;
+            }
+
+            let blend_states_changed = {
+                let renderpass_inner = self.pass.inner.borrow();
+                let ref_queue_blend_states = &ref_queue.blend_states;
+
+                if renderpass_inner.render_targets.len() != ref_queue_blend_states.len() {
+                   panic!("Render targets count mismatch: expected {}, got {}", renderpass_inner.render_targets.len(), ref_queue_blend_states.len());
+                } else {
+                    renderpass_inner.render_targets.iter().enumerate().any(|(i, render_target)| {
+                        let (state, color_write) = &ref_queue_blend_states[i];
+                        render_target.blend != *state || render_target.write_mask != *color_write
+                    })
+                }
+            };
+
+            if blend_states_changed {
                 push_new_queue = true;
             }
 
@@ -185,6 +203,13 @@ impl DrawingContextInner {
                 self.queue.push(queue);
             }
 
+            let blend_state = {
+                let renderpass_inner = self.pass.inner.borrow();
+                renderpass_inner.render_targets.iter()
+                    .map(|rt| (rt.blend.clone(), rt.write_mask))
+                    .collect::<Vec<_>>()
+            };
+
             self.current_queue = Some(DrawingQueue {
                 texture: self.texture.clone(),
                 shader: None,
@@ -193,6 +218,7 @@ impl DrawingContextInner {
                 start_index: self.indices.len() as u32,
                 start_vertex: 0, // TODO: Fix this
                 count,
+                blend_states: blend_state,
             });
         } else {
             let queue = self.current_queue.as_mut().unwrap();
@@ -260,6 +286,8 @@ pub(crate) struct DrawingQueue {
     pub start_index: u32,
     pub start_vertex: u32,
     pub count: u32,
+
+    pub blend_states: Vec<(Option<wgpu::BlendState>, Option<wgpu::ColorWrites>)>,
 }
 
 /// DrawingContext is an intermediate mode for drawing 2D primitives.
@@ -459,8 +487,8 @@ impl DrawingContext {
             return;
         }
 
-        let mut all_vertices = &self.vertex_cache;
-        let mut all_indices = &self.index_cache;
+        let all_vertices = &self.vertex_cache;
+        let all_indices = &self.index_cache;
 
         let current_texture = inner.texture.clone();
         let font_texture = inner.current_font_texture.clone();
@@ -1162,6 +1190,22 @@ impl DrawingContext {
         for queue in queues {
             let pass = &mut inner.pass;
 
+            if let Some(mut pass_inner) = pass.inner.try_borrow_mut() {
+                for (i, blend_state) in queue.blend_states.iter().enumerate() {
+                    if i >= pass_inner.render_targets.len() {
+                        #[cfg(any(debug_assertions, feature = "enable-release-validation"))]
+                        {
+                            crate::dbg_log!("DrawingContext::end: Blend state index {} out of bounds for render_targets", i);
+                        }
+                        continue;
+                    }
+
+                    let attachment = &mut pass_inner.render_targets[i];
+                    attachment.blend = blend_state.0.clone();
+                    attachment.write_mask = blend_state.1.clone();
+                }
+            }
+
             pass.set_scissor(queue.scissors);
             pass.set_viewport(queue.viewport, 0.0, 1.0);
 
@@ -1175,7 +1219,7 @@ impl DrawingContext {
             pass.set_attachment_sampler(0, 1, Some(sampler));
 
             pass
-                .draw_indexed(queue.start_index..queue.count, queue.start_vertex as i32, 1);
+                .draw_indexed(queue.start_index..(queue.start_index + queue.count), queue.start_vertex as i32, 1);
         }
     }
 }

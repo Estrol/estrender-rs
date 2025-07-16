@@ -303,7 +303,7 @@ impl Font {
         Point2::new(inner.texture_width as i32, inner.texture_height as i32)
     }
 
-    pub fn calculate_text_size(&self, text: &str) -> Vector2 {
+    pub fn calculate_text_size(&self, text: &str, max_bounds: Option<Vector2>) -> Vector2 {
         let inner = self.inner.borrow();
 
         let mut width = 0.0f32;
@@ -326,6 +326,16 @@ impl Font {
             }
 
             if let Some(glyph) = inner.glyphs.get(&codepoint) {
+                if max_bounds.is_some() {
+                    let max_bounds = max_bounds.unwrap();
+
+                    if pen_x + glyph.advance_x > max_bounds.x {
+                        width = width.max(pen_x);
+                        pen_x = 0.0;
+                        height += inner.line_height;
+                    }
+                }
+
                 pen_x += glyph.advance_x;
             }
         }
@@ -342,6 +352,7 @@ impl Font {
         &self,
         text: &str,
         format: FontBakeFormat,
+        max_bounds: Option<Vector2>,
     ) -> Result<(Vec<u8>, u32, u32), String> {
         let inner = self.inner.borrow();
 
@@ -374,6 +385,14 @@ impl Font {
                 let x1 = x0 + glyph.width;
                 let y1 = y0 + glyph.height;
 
+                if max_bounds.is_some() {
+                    let max_bounds = max_bounds.unwrap();
+                    if pen.x + glyph.advance_x > max_bounds.x {
+                        pen.x = 0.0;
+                        pen.y += inner.line_height as f32;
+                    }
+                }
+
                 min_x = min_x.min(x0);
                 min_y = min_y.min(y0);
                 max_x = max_x.max(x1);
@@ -405,6 +424,14 @@ impl Font {
             if codepoint == ' ' as u32 {
                 pen2.x += inner.space_width;
                 continue;
+            }
+
+            if max_bounds.is_some() {
+                let max_bounds = max_bounds.unwrap();
+                if pen2.x + inner.space_width > max_bounds.x {
+                    pen2.x = 0.0;
+                    pen2.y += inner.line_height as f32;
+                }
             }
 
             if let Some(glyph) = inner.glyphs.get(&codepoint) {
@@ -662,8 +689,9 @@ impl Font {
         &self,
         gpu: &mut GPU,
         text: &str,
+        max_bounds: Option<Vector2>,
     ) -> Result<Texture, TextureError> {
-        let (image_data, width, height) = self.create_baked_text_raw(text, FontBakeFormat::Rgba)
+        let (image_data, width, height) = self.create_baked_text_raw(text, FontBakeFormat::Rgba, max_bounds)
             .map_err(|_| TextureError::InvalidTextureData)?;
 
         let format = {
