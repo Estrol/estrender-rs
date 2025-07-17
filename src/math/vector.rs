@@ -49,6 +49,20 @@ impl Vector2 {
         }
     }
 
+    pub fn min(&self, other: &Self) -> Self {
+        Self {
+            x: self.x.min(other.x),
+            y: self.y.min(other.y),
+        }
+    }
+
+    pub fn max(&self, other: &Self) -> Self {
+        Self {
+            x: self.x.max(other.x),
+            y: self.y.max(other.y),
+        }
+    }
+
     pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
     pub const ONE: Self = Self { x: 1.0, y: 1.0 };
     pub const UP: Self = Self { x: 0.0, y: 1.0 };
@@ -258,6 +272,29 @@ impl Vector3 {
             x: self.x / length,
             y: self.y / length,
             z: self.z / length,
+        }
+    }
+
+    pub fn angle(&self, other: &Self) -> f32 {
+        let dot = self.dot(other);
+        let len1 = self.length();
+        let len2 = other.length();
+        (dot / (len1 * len2)).acos()
+    }
+
+    pub fn min(&self, other: &Self) -> Self {
+        Self {
+            x: self.x.min(other.x),
+            y: self.y.min(other.y),
+            z: self.z.min(other.z),
+        }
+    }
+
+    pub fn max(&self, other: &Self) -> Self {
+        Self {
+            x: self.x.max(other.x),
+            y: self.y.max(other.y),
+            z: self.z.max(other.z),
         }
     }
 

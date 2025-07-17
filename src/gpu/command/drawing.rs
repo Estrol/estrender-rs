@@ -67,6 +67,7 @@ pub(crate) struct DrawingContextInner {
     shader: Option<GraphicsShader>,
     scissor: Option<RectF>,
     viewport: Option<RectF>,
+    rotation: f32,
     current_queue: Option<DrawingQueue>,
     queue: Vec<DrawingQueue>,
 
@@ -128,7 +129,41 @@ impl DrawingContextInner {
             }
         }
 
-        self.vertices.extend_from_slice(&vertices);
+        if self.rotation < 0.0 {
+            self.rotation += 360.0;
+        }
+
+        if self.rotation > 0.0 {
+            let mut l = Vector3::new(f32::MAX, f32::MAX, 0.0);
+            let mut r = Vector3::new(f32::MIN, f32::MIN, 0.0);
+
+            for vertex in vertices {
+                l = l.min(&vertex.position);
+                r = r.max(&vertex.position);
+            }
+
+            let center = (l + r) * 0.5;
+            let angle = self.rotation.to_radians();
+
+            let cos_angle = angle.cos();
+            let sin_angle = angle.sin();
+
+            let mut vertices = vertices.to_vec();
+            for vertex in vertices.iter_mut() {
+                vertex.position -= center;
+
+                let x = vertex.position.x * cos_angle - vertex.position.y * sin_angle;
+                let y = vertex.position.x * sin_angle + vertex.position.y * cos_angle;
+
+                vertex.position.x = x + center.x;
+                vertex.position.y = y + center.y;
+            }
+
+            self.vertices.extend_from_slice(&vertices);
+        } else {
+            self.vertices.extend_from_slice(vertices);
+        }
+        
         self.indices.extend_from_slice(&indices);
     }
 
@@ -293,6 +328,7 @@ pub(crate) struct DrawingQueue {
 /// DrawingContext is an intermediate mode for drawing 2D primitives.
 ///
 /// It provides methods to draw rectangles, lines, triangles, circles, and images with various options for colors and textures.
+#[derive(Clone, Debug)]
 pub struct DrawingContext {
     pub(crate) inner: ArcRef<DrawingContextInner>,
 
@@ -319,6 +355,7 @@ impl DrawingContext {
 
             vertices: Vec::new(),
             indices: Vec::new(),
+            rotation: 0.0,
             texture: None,
             texture_uv: None,
             texture_atlas_uv: None,
@@ -977,6 +1014,15 @@ impl DrawingContext {
         }
 
         inner.push_geometry(&vertices, &indices, true);
+    }
+
+    pub fn set_rotation(&mut self, rotation: f32) {
+        let mut inner = self.inner.borrow_mut();
+        inner.rotation = rotation;
+    }
+
+    pub fn get_rotation(&self) -> f32 {
+        self.inner.borrow().rotation
     }
 
     pub fn set_scissor(&mut self, scissor: RectF) {

@@ -11,7 +11,7 @@ use super::{Color, Vector2, Vector3};
 /// };
 /// ```
 #[repr(C)]
-#[derive(Clone, Copy, Default, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Default, Pod, Zeroable)]
 pub struct Vertex {
     pub position: Vector3,
     pub color: Color,
@@ -33,6 +33,15 @@ impl Vertex {
             position: Vector3::new(position[0], position[1], position[2]),
             color: Color::new_const(color[0], color[1], color[2], color[3]),
             texcoord: Vector2::new(texcoord[0], texcoord[1]),
+        }
+    }
+
+    pub fn new_slice_raw(arr: &[f32]) -> Self {
+        assert!(arr.len() >= 9, "Array must have at least 9 elements");
+        Self {
+            position: Vector3::new(arr[0], arr[1], arr[2]),
+            color: Color::new_const(arr[3], arr[4], arr[5], arr[6]),
+            texcoord: Vector2::new(arr[7], arr[8]),
         }
     }
 }
